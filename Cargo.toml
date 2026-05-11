@@ -1,1 +1,16 @@
+[package]
+name = "legendaryos-store"
+version = "0.1.0"
+edition = "2021"
+authors = ["LegendaryOS Team"]
+description = "LegendaryOS Software Store - The legendary way to install apps"
 
+[dependencies]
+slint = "1.9"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+
+[build-dependencies]
+slint-build = "1.9"
