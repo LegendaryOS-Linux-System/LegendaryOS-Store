@@ -137,4 +137,4 @@ Future: pull live metadata from the [Flathub API](https://flathub.org/api/v2/app
 
 ## License
 
-MIT © LegendaryOS Contributors
+GPL 3.0 © LegendaryOS Team
