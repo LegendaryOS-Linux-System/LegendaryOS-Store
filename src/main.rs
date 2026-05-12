@@ -11,6 +11,9 @@ slint::include_modules!();
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // renderer-software (softbuffer) is the only compiled renderer —
+    // it works natively on Wayland, X11, and KMS without any OpenGL/glutin.
+    // No env-var workarounds needed.
     let window = MainWindow::new()?;
     let model = StoreModel::new(window.as_weak());
     model.init();
