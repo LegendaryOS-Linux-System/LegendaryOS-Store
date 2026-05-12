@@ -1,6 +1,3 @@
-// LegendaryOS Store — ui/store.slint
-// Retrowave / pixel-art dark theme inspired by the LegendaryOS phoenix logo
-
 import { ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
 // ─── Data structures ──────────────────────────────────────────────────────────
@@ -21,6 +18,7 @@ export struct AppEntry {
     is_installed: bool,
     is_updating: bool,
     flatpak_id: string,
+    backend: string,           // "flatpak" | "bootc"
     tags: [string],
 }
 
@@ -209,6 +207,10 @@ component AppCard inherits Rectangle {
                 text: app.size_mb < 1.0 ? "< 1 MB" : app.size_mb + " MB";
                 badge-color: #3b82f6;
             }
+            Badge {
+                text: app.backend == "bootc" ? "bootc" : "Flatpak";
+                badge-color: app.backend == "bootc" ? #16a34a : #7c3aed;
+            }
         }
 
         // Downloads
@@ -351,16 +353,20 @@ component SearchBar inherits Rectangle {
             color: #e9d5ff;
             font-size: 13px;
             vertical-alignment: center;
-            placeholder-text: "Search applications…";
-            placeholder-color: #3d2060;
 
             edited => {
                 root.text-changed(self.text);
                 StoreLogic.search_changed(self.text);
+                root.has-focus = true;
             }
-            focus-changed(focused) => {
-                root.has-focus = focused;
-            }
+        }
+
+        // Placeholder text (shown when empty)
+        if root.search-text == "" : Text {
+            text: "Search applications…";
+            color: #3d2060;
+            font-size: 13px;
+            vertical-alignment: center;
         }
 
         // Clear button
@@ -532,7 +538,7 @@ component DetailPanel inherits Rectangle {
                 }
             }
 
-            // Flatpak ID
+            // Flatpak ID / package name
             Rectangle {
                 height: 32px;
                 border-radius: 4px;
@@ -544,17 +550,50 @@ component DetailPanel inherits Rectangle {
                     padding-right: 10px;
                     spacing: 8px;
                     Text {
-                        text: "◈";
-                        color: #3b82f6;
+                        text: app.backend == "bootc" ? "⊞" : "◈";
+                        color: app.backend == "bootc" ? #16a34a : #3b82f6;
                         font-size: 12px;
                         vertical-alignment: center;
                     }
                     Text {
                         text: app.flatpak_id;
-                        color: #4c6fa8;
+                        color: app.backend == "bootc" ? #15803d : #4c6fa8;
                         font-size: 10px;
                         vertical-alignment: center;
                         overflow: elide;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Badge {
+                        text: app.backend == "bootc" ? "rpm-ostree" : "Flathub";
+                        badge-color: app.backend == "bootc" ? #16a34a : #3b82f6;
+                    }
+                }
+            }
+
+            // Reboot warning for bootc packages
+            if app.backend == "bootc" : Rectangle {
+                height: 44px;
+                border-radius: 5px;
+                background: #0f1f0f;
+                border-width: 1px;
+                border-color: #16a34a44;
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 10px;
+                    alignment: start;
+                    Text {
+                        text: "⟳";
+                        color: #16a34a;
+                        font-size: 16px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "System package — reboot required after install";
+                        color: #4ade80;
+                        font-size: 10px;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
                     }
                 }
             }
@@ -740,8 +779,6 @@ component ProgressToast inherits Rectangle {
     in property <float> progress: 0.0;   // 0.0 – 1.0
     in property <bool> visible-toast: false;
 
-    x: parent.width - width - 20px;
-    y: parent.height - height - 20px;
     width: 300px;
     height: 80px;
     border-radius: 8px;
@@ -851,15 +888,17 @@ export component MainWindow inherits Window {
                         padding: 12px;
                         spacing: 2px;
 
-                        Text {
-                            text: "BROWSE";
-                            color: #3d2060;
-                            font-size: 9px;
-                            letter-spacing: 2px;
-                            font-weight: 700;
+                        HorizontalLayout {
                             padding-left: 14px;
-                            padding-bottom: 6px;
                             padding-top: 8px;
+                            padding-bottom: 6px;
+                            Text {
+                                text: "BROWSE";
+                                color: #3d2060;
+                                font-size: 9px;
+                                letter-spacing: 2px;
+                                font-weight: 700;
+                            }
                         }
 
                         for cat in root.categories : SidebarItem {
@@ -874,14 +913,16 @@ export component MainWindow inherits Window {
 
                         Rectangle { height: 20px; }
 
-                        Text {
-                            text: "SYSTEM";
-                            color: #3d2060;
-                            font-size: 9px;
-                            letter-spacing: 2px;
-                            font-weight: 700;
+                        HorizontalLayout {
                             padding-left: 14px;
                             padding-bottom: 6px;
+                            Text {
+                                text: "SYSTEM";
+                                color: #3d2060;
+                                font-size: 9px;
+                                letter-spacing: 2px;
+                                font-weight: 700;
+                            }
                         }
 
                         SidebarItem {
@@ -905,7 +946,10 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        Rectangle { height: 1px; background: #1a0a2e; margin-top: 10px; margin-bottom: 10px; }
+                        Rectangle {
+                            height: 1px;
+                            background: #1a0a2e;
+                        }
 
                         // Flatpak info badge at bottom
                         Rectangle {
@@ -1169,5 +1213,7 @@ export component MainWindow inherits Window {
         app-name: root.toast-app;
         progress: root.toast-progress;
         visible-toast: root.toast-visible;
+        x: root.width - self.width - 20px;
+        y: root.height - self.height - 20px;
     }
 }
