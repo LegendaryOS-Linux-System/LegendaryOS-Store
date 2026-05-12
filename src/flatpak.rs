@@ -1,9 +1,3 @@
-// src/flatpak.rs — Flatpak integration via CLI subprocess
-//
-// On LegendaryOS (immutable Fedora + bootc), Flatpak is the primary
-// user-space app delivery mechanism. We shell out to `flatpak` directly
-// so there's no C-library dependency needed.
-
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
