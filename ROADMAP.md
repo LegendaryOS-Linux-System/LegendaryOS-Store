@@ -28,18 +28,18 @@
 
 ---
 
-## v0.2 — Search & Discovery  🔜
+## ◈ v0.2 — Search & Discovery  ✓
 
 **Better finding, better browsing**
 
-- [ ] Pagination / infinite scroll — load all Flathub apps (~2 000+), lazy-rendered
-- [ ] Search suggestions / autocomplete dropdown as you type
-- [ ] Search history (recent queries, cleared on exit)
-- [ ] Filter chips: sort by Name / Rating / Installs / Size / Recently updated
+- [x] Pagination — PAGE=40 with Load More button, up to 500 apps from Flathub API
+- [x] Autocomplete dropdown with app name suggestions + recent search history
+- [x] Search history (last 8 queries shown in suggestions)
+- [x] Sort pills: Popular / Name A-Z / Rating / Size / Recent
 - [ ] "Similar apps" section in detail panel
-- [ ] Featured / curated banner carousel on home screen
-- [ ] Recently installed section in sidebar
-- [ ] Keyboard navigation: arrow keys in grid, Enter to open detail, Escape to close
+- [x] Featured banner — top 3 highest-rated apps shown on home screen
+- [ ] Recently installed section in sidebar  (v0.3)
+- [ ] Keyboard navigation  (v0.3)
 
 ---
 
