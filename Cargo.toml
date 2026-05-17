@@ -1,23 +1,19 @@
 [package]
 name = "legendaryos-store"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["LegendaryOS Team"]
-description = "LegendaryOS Store — Flatpak + bootc software center"
+description = "LegendaryOS Store — Flatpak + bootc software center v0.2"
 
 [dependencies]
-# renderer-femtovg pulls glutin which fails on Wayland without EGL.
-# renderer-software uses softbuffer (DRM/KMS/Wayland native) — no OpenGL needed.
-# renderer-skia-vulkan is the fast path if Vulkan is available (optional).
-#
-# We deliberately EXCLUDE renderer-femtovg to avoid the glutin dependency.
+# renderer-software: no glutin, works natively on Wayland via softbuffer
 slint = { version = "1.9", default-features = false, features = [
     "std",
     "compat-1-2",
     "backend-winit",
-    "backend-winit-wayland",    # native wl_surface, no XWayland
-    "backend-winit-x11",        # X11 fallback
-    "renderer-software",        # softbuffer — works everywhere, no GPU required
+    "backend-winit-wayland",
+    "backend-winit-x11",
+    "renderer-software",
 ] }
 
 tokio      = { version = "1", features = ["full"] }
@@ -32,3 +28,4 @@ slint-build = "1.9"
 opt-level     = 3
 lto           = true
 codegen-units = 1
+strip         = true
