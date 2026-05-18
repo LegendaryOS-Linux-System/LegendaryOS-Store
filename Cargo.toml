@@ -1,9 +1,9 @@
 [package]
 name = "legendaryos-store"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["LegendaryOS Team"]
-description = "LegendaryOS Store — Flatpak + bootc software center v0.2"
+description = "LegendaryOS Store — Flatpak + bootc software center v0.3"
 
 [dependencies]
 # renderer-software: no glutin, works natively on Wayland via softbuffer
