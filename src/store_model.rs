@@ -567,3 +567,34 @@ fn category_label(id: &str) -> &str {
         _              => "Other",
     }
 }
+
+// ─── v0.3: Permissions helper ────────────────────────────────────────────────
+
+/// Parse Flatpak sandbox permissions from `flatpak info --show-permissions <id>`.
+/// Returns human-readable permission names.
+pub async fn get_app_permissions(flatpak_id: &str) -> Vec<String> {
+    let out = tokio::process::Command::new("flatpak")
+        .args(["info", "--show-permissions", flatpak_id])
+        .output()
+        .await;
+
+    let text = match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return vec![],
+    };
+
+    let mut perms: Vec<String> = vec![];
+    for line in text.lines() {
+        let l = line.trim().to_lowercase();
+        if l.contains("network")              { perms.push("Network".into()); }
+        if l.contains("home") || l.contains("filesystem") { perms.push("Filesystem".into()); }
+        if l.contains("camera") || l.contains("webcam")   { perms.push("Webcam".into()); }
+        if l.contains("microphone") || l.contains("audio-record") { perms.push("Microphone".into()); }
+        if l.contains("location")             { perms.push("Location".into()); }
+        if l.contains("notification")         { perms.push("Notifications".into()); }
+        if l.contains("bluetooth")            { perms.push("Bluetooth".into()); }
+        if l.contains("usb")                  { perms.push("USB".into()); }
+    }
+    perms.dedup();
+    perms
+}
