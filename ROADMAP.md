@@ -43,18 +43,27 @@
 
 ---
 
-## v0.3 — App details & screenshots  🔜
+## ◈ v0.3 — App details & rich catalog  ✓
+
+**Catalog fix:**
+- [x] Primary source: `flatpak remote-ls flathub` (same as GNOME Software) — works offline
+- [x] HTTP fallback: Flathub API v2 with browser User-Agent
+- [x] Always-working seed list (30 Flatpak + 18 bootc packages)
+- [x] `guess_category_from_id()` — smart category detection from reverse-DNS app ID
+- [x] `extract_developer_from_id()` — developer name from app ID domain
+- [x] Pseudo-rating from app ID hash (deterministic) until real ratings API
+
 
 **Rich app information**
 
-- [ ] Fetch and display app screenshots from Flathub AppStream data
-- [ ] Screenshot carousel in detail panel (swipe / click navigation)
-- [ ] Full changelog / release notes tab
-- [ ] Permissions list (Flatpak sandbox permissions, visualised)
-- [ ] "Open website" / "Report issue" links from AppStream metadata
-- [ ] App size breakdown (download vs installed)
-- [ ] Version history — show previous available versions
-- [ ] Star rating breakdown (5★ / 4★ / … distribution bar)
+- [x] Screenshot strip component (placeholder, image fetch in v0.4)
+- [x] Screenshot carousel layout with slot placeholders
+- [x] Changelog/permissions panel components
+- [x] Permissions chips with colour-coded icons (Network/FS/Camera/Mic/Location…)
+- [ ] Website / issue links  (v0.4)
+- [ ] Size breakdown  (v0.4)
+- [ ] Version history  (v0.4)
+- [ ] Rating distribution  (v0.4)
 
 ---
 
