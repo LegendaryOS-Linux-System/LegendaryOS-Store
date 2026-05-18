@@ -793,7 +793,7 @@ component TopBar inherits Rectangle {
             VerticalLayout {
                 alignment: center; spacing: 0px;
                 Text { text: "LEGENDARYOS"; color: #d946ef; font-size: 14px; font-weight: 900; letter-spacing: 3px; }
-                Text { text: "STORE  v0.2"; color: #7c3aed; font-size: 9px; font-weight: 700; letter-spacing: 4px; }
+                Text { text: "STORE  v0.3"; color: #7c3aed; font-size: 9px; font-weight: 700; letter-spacing: 4px; }
             }
         }
 
@@ -1226,5 +1226,81 @@ export component MainWindow inherits Window {
         progress:      root.toast-progress;
         visible-toast: root.toast-visible;
         status-msg:    root.toast-status;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v0.3 additions: permissions list, changelog entry, recently-installed banner
+// (these extend MainWindow via in-out properties already defined)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Permissions chip row — shown in DetailPanel
+export component PermissionList inherits VerticalLayout {
+    in property <[string]> permissions: [];
+    spacing: 6px;
+
+    if root.permissions.length > 0 : VerticalLayout {
+        spacing: 6px;
+        Text { text: "PERMISSIONS"; color: #2e1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
+        for perm in root.permissions : Rectangle {
+            height: 26px; border-radius: 4px;
+            background: perm-color(perm).transparentize(0.88);
+            border-width: 1px; border-color: perm-color(perm).transparentize(0.6);
+            HorizontalLayout {
+                padding-left: 10px; spacing: 8px; alignment: start;
+                Text { text: perm-icon(perm); color: perm-color(perm); font-size: 12px; vertical-alignment: center; }
+                Text { text: perm; color: perm-color(perm); font-size: 10px; font-weight: 600; vertical-alignment: center; }
+            }
+        }
+    }
+
+    pure function perm-color(p: string) -> color {
+        p == "Network"        ? #3b82f6 :
+        p == "Filesystem"     ? #f59e0b :
+        p == "Webcam"         ? #ef4444 :
+        p == "Microphone"     ? #ef4444 :
+        p == "Location"       ? #22c55e :
+        p == "Notifications"  ? #a855f7 :
+        p == "Bluetooth"      ? #60a5fa :
+        p == "USB"            ? #fb923c :
+                                #6b7280
+    }
+
+    pure function perm-icon(p: string) -> string {
+        p == "Network"        ? "⊕" :
+        p == "Filesystem"     ? "◉" :
+        p == "Webcam"         ? "◎" :
+        p == "Microphone"     ? "◈" :
+        p == "Location"       ? "⊞" :
+        p == "Notifications"  ? "◆" :
+                                "▸"
+    }
+}
+
+// Screenshot placeholder strip
+export component ScreenshotStrip inherits Rectangle {
+    in property <[string]> urls: [];
+    height: urls.length > 0 ? 140px : 0px;
+    background: transparent;
+
+    if urls.length == 0 : Rectangle {
+        height: 0px;
+    }
+
+    if urls.length > 0 : ScrollView {
+        HorizontalLayout {
+            spacing: 10px; padding: 4px;
+            for url[i] in urls : Rectangle {
+                width: 220px; height: 124px; border-radius: 6px;
+                background: #0d0422;
+                border-width: 1px; border-color: #2a1040;
+                // Placeholder until image loading is implemented (v0.4+)
+                VerticalLayout {
+                    alignment: center; spacing: 6px;
+                    Text { text: "◉"; color: #2a1040; font-size: 28px; horizontal-alignment: center; }
+                    Text { text: "Screenshot " + (i + 1); color: #2a1040; font-size: 10px; horizontal-alignment: center; }
+                }
+            }
+        }
     }
 }
