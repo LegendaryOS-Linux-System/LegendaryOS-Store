@@ -1,6 +1,6 @@
 [package]
 name = "legendaryos-store"
-version = "0.3.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["LegendaryOS Team"]
 description = "LegendaryOS Store — Flatpak + bootc software center v0.3"
