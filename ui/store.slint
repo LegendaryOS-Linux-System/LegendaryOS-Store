@@ -18,11 +18,16 @@ export struct AppEntry {
     rating:         float,
     download_count: string,
     size_mb:        float,
+    installed_size: float,
     is_installed:   bool,
     is_updating:    bool,
+    is_selected:    bool,
     backend:        string,
     tags:           [string],
     icon_url:       string,
+    website:        string,
+    changelog:      string,
+    permissions:    [string],
 }
 
 export struct CategoryEntry {
@@ -33,18 +38,51 @@ export struct CategoryEntry {
 }
 
 export struct SuggestionEntry {
-    text:     string,
-    app_id:   string,
+    text:      string,
+    app_id:    string,
     is_recent: bool,
 }
 
-export struct SortOption {
-    id:    string,
+export struct QueueEntry {
+    app_id:   string,
+    name:     string,
+    action:   string,
+    progress: float,
+    status:   string,
+}
+
+export struct DiskUsageEntry {
     label: string,
+    mb:    float,
+    color: color,
+}
+
+export struct RemoteEntry {
+    name:    string,
+    url:     string,
+    enabled: bool,
+}
+
+export struct BootcStatusEntry {
+    booted_image:    string,
+    booted_version:  string,
+    staged_image:    string,
+    layered_count:   int,
+    reboot_required: bool,
+    timestamp:       string,
+}
+
+export struct RecentEntry {
+    app_id:  string,
+    name:    string,
+    action:  string,
+    icon_letter: string,
+    icon_color: color,
+    when:    string,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Global logic bridge
+// Global callbacks
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export global StoreLogic {
@@ -56,10 +94,35 @@ export global StoreLogic {
     callback category_changed(string);
     callback open_app_detail(string);
     callback refresh_installed();
-    callback load_more();                   // pagination: next page
-    callback sort_changed(string);          // "name"|"rating"|"installs"|"size"
-    callback suggestion_selected(string);   // app_id or search query
+    callback load_more();
+    callback sort_changed(string);
+    callback suggestion_selected(string);
     callback clear_search_history();
+    // batch
+    callback toggle_select(string);
+    callback select_all_visible();
+    callback clear_selection();
+    callback batch_install();
+    callback batch_remove();
+    callback batch_update();
+    // queue
+    callback cancel_queue_item(string);
+    callback clear_done_queue();
+    // disk
+    callback refresh_disk_usage();
+    callback run_cleanup();
+    // v0.5 remotes
+    callback toggle_remote(string);
+    callback add_remote(string, string);
+    callback remove_remote(string);
+    callback refresh_remotes();
+    // v0.5 bootc
+    callback bootc_upgrade();
+    callback bootc_rollback();
+    callback bootc_refresh_status();
+    callback rpmostree_upgrade();
+    // v0.5 notify
+    callback dismiss_notification();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -106,7 +169,6 @@ component Divider inherits Rectangle {
     height: 1px; background: #160830;
 }
 
-// Pill button for sort/filter chips
 component PillButton inherits Rectangle {
     in property <string> label: "";
     in property <bool>   active: false;
@@ -118,35 +180,58 @@ component PillButton inherits Rectangle {
     background: active ? #7c3aed : (hov ? #1a0a2e : #0d0619);
     border-width: 1px;
     border-color: active ? #d946ef : (hov ? #4c2080 : #1e0f36);
-    animate background   { duration: 120ms; }
+    animate background { duration: 120ms; }
     animate border-color { duration: 120ms; }
 
     lbl := Text {
-        text: root.label;
-        color: active ? #fff : (hov ? #c084fc : #6b4a9e);
+        text: root.label; color: active ? #fff : (hov ? #c084fc : #6b4a9e);
         font-size: 11px; font-weight: active ? 700 : 400;
         animate color { duration: 120ms; }
     }
     TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        mouse-cursor: pointer; clicked => { root.clicked(); }
         pointer-event(e) => { root.hov = e.kind == PointerEventKind.move; }
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Action button
-// ═══════════════════════════════════════════════════════════════════════════════
+component CheckBox inherits Rectangle {
+    in property <bool> checked: false;
+    callback toggled();
+    private property <bool> hov: false;
+    width: 18px; height: 18px; border-radius: 4px;
+    background: checked ? #7c3aed : (hov ? #1a0a2e : #0a0320);
+    border-width: 2px; border-color: checked ? #d946ef : (hov ? #4c2080 : #2a1040);
+    animate background { duration: 100ms; }
+    if checked : Text { text: "✓"; color: #fff; font-size: 12px; font-weight: 900; }
+    TouchArea {
+        mouse-cursor: pointer; clicked => { root.toggled(); }
+        pointer-event(e) => { root.hov = e.kind == PointerEventKind.move; }
+    }
+}
 
+component MiniProgress inherits Rectangle {
+    in property <float> value: 0.0;
+    in property <color> bar-color: #7c3aed;
+    height: 4px; border-radius: 2px; background: #1a0836;
+    Rectangle {
+        width: parent.width * root.value; height: parent.height;
+        border-radius: parent.border-radius; background: root.bar-color;
+        animate width { duration: 200ms; easing: ease-out; }
+    }
+}
+
+// Action button
 component ActionButton inherits Rectangle {
     in property <bool> installed: false;
     in property <bool> updating:  false;
+    in property <bool> queued:    false;
     callback clicked();
     private property <bool> hov: false;
 
     height: 32px; border-radius: 5px; border-width: 1px;
-    border-color: installed ? #7c3aed : #d946ef;
-    background: updating  ? #1a0a2e :
+    border-color: queued ? #f59e0b : installed ? #7c3aed : #d946ef;
+    background: queued   ? #2a1e00 :
+                updating ? #1a0a2e :
                 installed ? (hov ? #3b0f6e : #220a4a) :
                             (hov ? #c026d3 : #9333ea);
     animate background { duration: 120ms; easing: ease-out; }
@@ -154,18 +239,17 @@ component ActionButton inherits Rectangle {
     HorizontalLayout {
         spacing: 6px; alignment: center;
         Text {
-            text: updating ? "⟳" : installed ? "⊗" : "⊕";
-            color: #fff; font-size: 13px; vertical-alignment: center;
+            text: queued ? "…" : updating ? "⟳" : installed ? "⊗" : "⊕";
+            color: queued ? #f59e0b : #fff; font-size: 13px; vertical-alignment: center;
         }
         Text {
-            text: updating ? "UPDATING…" : installed ? "REMOVE" : "INSTALL";
-            color: installed ? #c084fc : #fff;
+            text: queued ? "QUEUED" : updating ? "UPDATING…" : installed ? "REMOVE" : "INSTALL";
+            color: queued ? #f59e0b : installed ? #c084fc : #fff;
             font-size: 10px; font-weight: 700; letter-spacing: 1px; vertical-alignment: center;
         }
     }
     TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        mouse-cursor: pointer; clicked => { root.clicked(); }
         pointer-event(e) => { root.hov = e.kind == PointerEventKind.move; }
     }
 }
@@ -176,50 +260,44 @@ component ActionButton inherits Rectangle {
 
 component AppCard inherits Rectangle {
     in property <AppEntry> app;
-    in property <bool>     compact: false;   // list-view mode (future)
+    in property <bool>     batch-mode: false;
     callback clicked();
     callback action();
+    callback toggled();
     private property <bool> hov: false;
 
-    width: 224px; height: 268px;
-    background: hov ? #170826 : #0f061e;
+    width: 224px; height: 272px;
+    background: app.is_selected ? #1a0840 : (hov ? #170826 : #0f061e);
     border-radius: 9px; border-width: 1px;
-    border-color: hov ? #7c3aed66 : #160830;
+    border-color: app.is_selected ? #d946ef : (hov ? #7c3aed66 : #160830);
     clip: true;
     animate background   { duration: 140ms; easing: ease-out; }
     animate border-color { duration: 140ms; easing: ease-out; }
 
-    // Top gradient bar
     Rectangle {
         x: 0; y: 0; width: parent.width; height: 2px;
         background: @linear-gradient(90deg, #d946ef 0%, #7c3aed 50%, #3b82f6 100%);
-        opacity: hov ? 1.0 : 0.3;
+        opacity: (hov || app.is_selected) ? 1.0 : 0.3;
         animate opacity { duration: 140ms; }
     }
-
-    // Installed indicator (green dot, top-right)
     if app.is_installed : Rectangle {
         x: parent.width - 20px; y: 9px;
         width: 8px; height: 8px; border-radius: 4px; background: #22c55e;
-        drop-shadow-blur: 6px; drop-shadow-color: #22c55e99;
+        drop-shadow-blur: 5px; drop-shadow-color: #22c55e88;
     }
-
-    // bootc indicator
     if app.backend == "bootc" : Rectangle {
-        x: parent.width - 20px;
-        y: app.is_installed ? 24px : 9px;
+        x: parent.width - 20px; y: app.is_installed ? 24px : 9px;
         width: 8px; height: 8px; border-radius: 4px; background: #16a34a;
     }
-
+    if batch-mode || app.is_selected : CheckBox {
+        x: 10px; y: 10px; checked: app.is_selected; toggled => { root.toggled(); }
+    }
     TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        mouse-cursor: pointer; clicked => { root.clicked(); }
         pointer-event(e) => { root.hov = e.kind == PointerEventKind.move; }
     }
-
     VerticalLayout {
         padding: 14px; spacing: 10px;
-
         HorizontalLayout {
             spacing: 12px; alignment: start;
             AppIcon { letter: app.icon_letter; accent: app.icon_color; sz: 50px; }
@@ -233,12 +311,10 @@ component AppCard inherits Rectangle {
                 StarRating { rating: app.rating; }
             }
         }
-
         Text {
             text: app.summary; color: #8060a8;
             font-size: 11px; wrap: word-wrap; overflow: elide; max-height: 40px;
         }
-
         HorizontalLayout {
             spacing: 6px; alignment: start;
             Badge { text: app.category; badge-color: #7c3aed; }
@@ -247,29 +323,23 @@ component AppCard inherits Rectangle {
                 badge-color: app.backend == "bootc" ? #16a34a : #3b82f6;
             }
         }
-
         HorizontalLayout {
             spacing: 10px; alignment: start;
-            if app.size_mb > 0.0 : Text {
-                text: app.size_mb >= 1000.0
-                    ? (Math.round(app.size_mb / 100.0) / 10.0) + " GB"
-                    : app.size_mb + " MB";
+            if app.installed_size > 0.0 : Text {
+                text: app.installed_size >= 1000.0
+                    ? (Math.round(app.installed_size / 100.0) / 10.0) + " GB"
+                    : app.installed_size + " MB";
                 color: #3d1a60; font-size: 10px; vertical-alignment: center;
             }
             Text { text: "↓ " + app.download_count; color: #3d1a60; font-size: 10px; vertical-alignment: center; }
         }
-
         Divider { }
-
-        ActionButton {
-            installed: app.is_installed; updating: app.is_updating;
-            clicked => { root.action(); }
-        }
+        ActionButton { installed: app.is_installed; updating: app.is_updating; clicked => { root.action(); } }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Featured banner card (home screen hero)
+// Featured banner
 // ═══════════════════════════════════════════════════════════════════════════════
 
 component FeaturedCard inherits Rectangle {
@@ -278,63 +348,667 @@ component FeaturedCard inherits Rectangle {
     callback action();
     private property <bool> hov: false;
 
-    height: 160px;
-    border-radius: 12px; clip: true;
+    height: 150px; border-radius: 12px; clip: true;
     border-width: 1px; border-color: hov ? #d946ef66 : #2a1040;
+    background: @linear-gradient(135deg, #0a0220, #1a0840);
     animate border-color { duration: 160ms; }
 
-    // Gradient background using accent color
-    background: @linear-gradient(135deg, #0a0220, #1a0840);
-
-    // Left colored accent block
-    Rectangle {
-        x: 0; y: 0; width: 6px; height: parent.height;
-        background: @linear-gradient(180deg, #d946ef, #7c3aed, #3b82f6);
-    }
-
+    Rectangle { x: 0; y: 0; width: 5px; height: parent.height; background: @linear-gradient(180deg, #d946ef, #7c3aed, #3b82f6); }
     HorizontalLayout {
         padding-left: 22px; padding-right: 22px; spacing: 24px; alignment: start;
-
-        // Big icon
-        AppIcon { letter: app.icon_letter; accent: app.icon_color; sz: 72px; }
-
-        // Info
+        AppIcon { letter: app.icon_letter; accent: app.icon_color; sz: 68px; }
         VerticalLayout {
-            spacing: 8px; alignment: center; horizontal-stretch: 1;
-
+            spacing: 7px; alignment: center; horizontal-stretch: 1;
             HorizontalLayout {
                 spacing: 10px; alignment: start;
-                Text { text: "FEATURED"; color: #d946ef; font-size: 9px; font-weight: 900; letter-spacing: 2px; vertical-alignment: center; }
-                Badge {
-                    text: app.backend == "bootc" ? "SYSTEM" : "FLATPAK";
-                    badge-color: app.backend == "bootc" ? #16a34a : #3b82f6;
-                }
+                Text { text: "★ FEATURED"; color: #d946ef; font-size: 9px; font-weight: 900; letter-spacing: 2px; vertical-alignment: center; }
+                Badge { text: app.backend == "bootc" ? "SYSTEM" : "FLATPAK"; badge-color: app.backend == "bootc" ? #16a34a : #3b82f6; }
             }
-
-            Text { text: app.name; color: #f0e6ff; font-size: 22px; font-weight: 900; overflow: elide; }
-            Text { text: app.summary; color: #8b6ab4; font-size: 12px; wrap: word-wrap; max-height: 32px; overflow: elide; }
-
+            Text { text: app.name; color: #f0e6ff; font-size: 20px; font-weight: 900; overflow: elide; }
+            Text { text: app.summary; color: #8b6ab4; font-size: 12px; wrap: word-wrap; max-height: 30px; overflow: elide; }
             HorizontalLayout {
                 spacing: 12px; alignment: start;
                 StarRating { rating: app.rating; }
                 Text { text: "↓ " + app.download_count; color: #4c2080; font-size: 11px; vertical-alignment: center; }
             }
         }
-
-        // Action
         VerticalLayout {
             alignment: center;
-            ActionButton {
-                width: 120px; installed: app.is_installed; updating: app.is_updating;
-                clicked => { root.action(); }
+            ActionButton { width: 110px; installed: app.is_installed; updating: app.is_updating; clicked => { root.action(); } }
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer; clicked => { root.clicked(); }
+        pointer-event(e) => { root.hov = e.kind == PointerEventKind.move; }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v0.5 — bootc/rpm-ostree status panel
+// ═══════════════════════════════════════════════════════════════════════════════
+
+component BootcPanel inherits Rectangle {
+    in property <BootcStatusEntry> st;
+    in property <bool>             visible-panel: false;
+    in property <bool>             upgrading: false;
+    callback close();
+    callback do-upgrade();
+    callback do-rollback();
+    callback do-refresh();
+    callback do-rpmostree-upgrade();
+
+    background: #07021a; border-width: 1px; border-color: #160830;
+
+    if visible-panel : VerticalLayout {
+        padding: 20px; spacing: 14px;
+
+        // Header
+        HorizontalLayout {
+            alignment: space-between;
+            HorizontalLayout {
+                spacing: 10px; alignment: start;
+                Text { text: "◎"; color: #16a34a; font-size: 16px; vertical-alignment: center; }
+                Text { text: "SYSTEM STATUS"; color: #16a34a; font-size: 11px; font-weight: 900; letter-spacing: 2px; vertical-alignment: center; }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    width: 28px; height: 28px; border-radius: 14px; background: #160830; border-width: 1px; border-color: #2a1040;
+                    Text { text: "⟳"; color: #7c3aed; font-size: 14px; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.do-refresh(); } }
+                }
+                Rectangle {
+                    width: 28px; height: 28px; border-radius: 14px; background: #160830; border-width: 1px; border-color: #2a1040;
+                    Text { text: "✕"; color: #7c3aed; font-size: 12px; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.close(); } }
+                }
+            }
+        }
+
+        Divider { }
+
+        // Reboot pending banner
+        if st.reboot_required : Rectangle {
+            height: 40px; border-radius: 7px; background: #1a0f00;
+            border-width: 1px; border-color: #f59e0b66;
+            drop-shadow-blur: 8px; drop-shadow-color: #f59e0b22;
+            HorizontalLayout {
+                padding-left: 14px; spacing: 10px; alignment: start;
+                Text { text: "⚠"; color: #f59e0b; font-size: 16px; vertical-alignment: center; }
+                Text { text: "Reboot required to activate staged changes"; color: #fcd34d; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+            }
+        }
+
+        // Booted image
+        VerticalLayout {
+            spacing: 6px;
+            Text { text: "BOOTED IMAGE"; color: #2e1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
+            Rectangle {
+                height: 38px; border-radius: 6px; background: #0a0320;
+                border-width: 1px; border-color: #1e0f36;
+                HorizontalLayout {
+                    padding-left: 12px; padding-right: 12px; spacing: 10px; alignment: start;
+                    Text { text: "◈"; color: #16a34a; font-size: 14px; vertical-alignment: center; }
+                    VerticalLayout {
+                        alignment: center; spacing: 2px;
+                        Text {
+                            text: st.booted_image != "" ? st.booted_image : "LegendaryOS (local)";
+                            color: #c084fc; font-size: 11px; font-weight: 700; overflow: elide;
+                        }
+                        Text {
+                            text: st.booted_version != "" ? "v" + st.booted_version : "current";
+                            color: #6b4a9e; font-size: 10px;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Staged image (if pending)
+        if st.staged_image != "" : VerticalLayout {
+            spacing: 6px;
+            Text { text: "STAGED (PENDING REBOOT)"; color: #2e1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
+            Rectangle {
+                height: 34px; border-radius: 6px; background: #0f0e00;
+                border-width: 1px; border-color: #f59e0b44;
+                HorizontalLayout {
+                    padding-left: 12px; spacing: 10px; alignment: start;
+                    Text { text: "⟳"; color: #f59e0b; font-size: 14px; vertical-alignment: center; }
+                    Text {
+                        text: st.staged_image; color: #fcd34d;
+                        font-size: 11px; font-weight: 700; vertical-alignment: center; overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // Layered packages count
+        Rectangle {
+            height: 34px; border-radius: 6px; background: #0a0320;
+            border-width: 1px; border-color: #1e0f36;
+            HorizontalLayout {
+                padding-left: 12px; padding-right: 12px; spacing: 10px; alignment: space-between;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "⊞"; color: #7c3aed; font-size: 13px; vertical-alignment: center; }
+                    Text { text: "Layered packages"; color: #8060a8; font-size: 11px; vertical-alignment: center; }
+                }
+                Text {
+                    text: st.layered_count;
+                    color: #d946ef; font-size: 14px; font-weight: 900; vertical-alignment: center;
+                }
+            }
+        }
+
+        Divider { }
+
+        // Actions
+        Text { text: "ACTIONS"; color: #2e1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
+
+        // bootc upgrade
+        Rectangle {
+            height: 44px; border-radius: 7px;
+            border-width: 1px; border-color: #16a34a;
+            private property <bool> hov: false;
+            background: upgrading ? #0a1a0a : (hov ? #122a14 : #0d1a10);
+            animate background { duration: 110ms; }
+            HorizontalLayout {
+                padding-left: 16px; spacing: 12px; alignment: start;
+                Text { text: upgrading ? "⟳" : "▲"; color: #4ade80; font-size: 16px; vertical-alignment: center; }
+                VerticalLayout {
+                    alignment: center; spacing: 2px;
+                    Text { text: upgrading ? "Pulling base image…" : "bootc upgrade"; color: #4ade80; font-size: 12px; font-weight: 700; }
+                    Text { text: "Pull latest LegendaryOS base image"; color: #16a34a; font-size: 10px; }
+                }
+            }
+            TouchArea {
+                mouse-cursor: pointer; clicked => { root.do-upgrade(); }
+                pointer-event(e) => { parent.hov = e.kind == PointerEventKind.move; }
+            }
+        }
+
+        // rpm-ostree upgrade
+        Rectangle {
+            height: 44px; border-radius: 7px;
+            border-width: 1px; border-color: #3b82f6;
+            private property <bool> hov: false;
+            background: hov ? #0c1422 : #0a0f1a;
+            animate background { duration: 110ms; }
+            HorizontalLayout {
+                padding-left: 16px; spacing: 12px; alignment: start;
+                Text { text: "⟳"; color: #93c5fd; font-size: 16px; vertical-alignment: center; }
+                VerticalLayout {
+                    alignment: center; spacing: 2px;
+                    Text { text: "rpm-ostree upgrade"; color: #93c5fd; font-size: 12px; font-weight: 700; }
+                    Text { text: "Update base + all layered RPM packages"; color: #3b82f6; font-size: 10px; }
+                }
+            }
+            TouchArea {
+                mouse-cursor: pointer; clicked => { root.do-rpmostree-upgrade(); }
+                pointer-event(e) => { parent.hov = e.kind == PointerEventKind.move; }
+            }
+        }
+
+        // Rollback
+        Rectangle {
+            height: 44px; border-radius: 7px;
+            border-width: 1px; border-color: #ef4444;
+            private property <bool> hov: false;
+            background: hov ? #220a0a : #1a0808;
+            animate background { duration: 110ms; }
+            HorizontalLayout {
+                padding-left: 16px; spacing: 12px; alignment: start;
+                Text { text: "◁"; color: #fca5a5; font-size: 16px; vertical-alignment: center; }
+                VerticalLayout {
+                    alignment: center; spacing: 2px;
+                    Text { text: "rpm-ostree rollback"; color: #fca5a5; font-size: 12px; font-weight: 700; }
+                    Text { text: "Revert to previous deployment"; color: #ef4444; font-size: 10px; }
+                }
+            }
+            TouchArea {
+                mouse-cursor: pointer; clicked => { root.do-rollback(); }
+                pointer-event(e) => { parent.hov = e.kind == PointerEventKind.move; }
             }
         }
     }
+}
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v0.5 — Flatpak remotes panel
+// ═══════════════════════════════════════════════════════════════════════════════
+
+component RemotesPanel inherits Rectangle {
+    in property <[RemoteEntry]> remotes: [];
+    in property <bool>          visible-panel: false;
+    in-out property <string>    new-name: "";
+    in-out property <string>    new-url:  "";
+    callback close();
+    callback toggle(string);
+    callback remove-remote(string);
+    callback add-new();
+    callback refresh();
+
+    background: #07021a; border-width: 1px; border-color: #160830;
+
+    if visible-panel : VerticalLayout {
+        padding: 20px; spacing: 14px;
+
+        HorizontalLayout {
+            alignment: space-between;
+            HorizontalLayout {
+                spacing: 10px; alignment: start;
+                Text { text: "⊕"; color: #3b82f6; font-size: 16px; vertical-alignment: center; }
+                Text { text: "REPOSITORIES"; color: #3b82f6; font-size: 11px; font-weight: 900; letter-spacing: 2px; vertical-alignment: center; }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    width: 28px; height: 28px; border-radius: 14px; background: #160830; border-width: 1px; border-color: #2a1040;
+                    Text { text: "⟳"; color: #7c3aed; font-size: 14px; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.refresh(); } }
+                }
+                Rectangle {
+                    width: 28px; height: 28px; border-radius: 14px; background: #160830; border-width: 1px; border-color: #2a1040;
+                    Text { text: "✕"; color: #7c3aed; font-size: 12px; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.close(); } }
+                }
+            }
+        }
+
+        Divider { }
+
+        // Remote list
+        VerticalLayout {
+            spacing: 8px;
+            for remote in root.remotes : Rectangle {
+                height: 58px; border-radius: 7px;
+                background: remote.enabled ? #0a0f20 : #080310;
+                border-width: 1px;
+                border-color: remote.enabled ? #3b82f644 : #160830;
+
+                HorizontalLayout {
+                    padding-left: 14px; padding-right: 12px; spacing: 12px; alignment: start;
+
+                    // Enable toggle circle
+                    Rectangle {
+                        width: 22px; height: 22px; border-radius: 11px;
+                        background: remote.enabled ? #3b82f6 : #1e0f36;
+                        border-width: 2px; border-color: remote.enabled ? #60a5fa : #2a1040;
+                        animate background { duration: 150ms; }
+                        Text { text: remote.enabled ? "●" : "○"; color: #fff; font-size: 12px; }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.toggle(remote.name); } }
+                    }
+
+                    VerticalLayout {
+                        spacing: 3px; alignment: center; horizontal-stretch: 1;
+                        Text { text: remote.name; color: remote.enabled ? #e9d5ff : #4c2080; font-size: 12px; font-weight: 700; }
+                        Text { text: remote.url; color: #2e4a6e; font-size: 10px; overflow: elide; }
+                    }
+
+                    // Remove button (not for flathub)
+                    if remote.name != "flathub" : Rectangle {
+                        width: 24px; height: 24px; border-radius: 12px;
+                        background: #1a0808; border-width: 1px; border-color: #ef444433;
+                        Text { text: "✕"; color: #ef4444; font-size: 11px; }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.remove-remote(remote.name); } }
+                    }
+                }
+            }
+        }
+
+        Divider { }
+
+        // Add new remote
+        Text { text: "ADD REPOSITORY"; color: #2e1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
+
+        Rectangle {
+            height: 38px; border-radius: 6px; background: #0b0418;
+            border-width: 1px; border-color: #1e0f36;
+            HorizontalLayout {
+                padding-left: 12px; spacing: 8px;
+                Text { text: "Name"; color: #3d1a60; font-size: 11px; vertical-alignment: center; width: 50px; }
+                TextInput {
+                    text <=> root.new-name; color: #e9d5ff; font-size: 11px;
+                    vertical-alignment: center; horizontal-stretch: 1;
+                }
+            }
+        }
+        Rectangle {
+            height: 38px; border-radius: 6px; background: #0b0418;
+            border-width: 1px; border-color: #1e0f36;
+            HorizontalLayout {
+                padding-left: 12px; spacing: 8px;
+                Text { text: "URL"; color: #3d1a60; font-size: 11px; vertical-alignment: center; width: 50px; }
+                TextInput {
+                    text <=> root.new-url; color: #e9d5ff; font-size: 11px;
+                    vertical-alignment: center; horizontal-stretch: 1;
+                }
+            }
+        }
+        Rectangle {
+            height: 36px; border-radius: 6px;
+            background: new-name != "" && new-url != "" ? #1a3060 : #0d0619;
+            border-width: 1px;
+            border-color: new-name != "" && new-url != "" ? #3b82f6 : #1e0f36;
+            Text {
+                text: "Add Repository";
+                color: new-name != "" && new-url != "" ? #93c5fd : #3d1a60;
+                font-size: 12px; font-weight: 700;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { if root.new-name != "" && root.new-url != "" { root.add-new(); } }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v0.5 — Recently installed sidebar section
+// ═══════════════════════════════════════════════════════════════════════════════
+
+component RecentItem inherits Rectangle {
+    in property <RecentEntry> item;
+    callback clicked();
+    private property <bool> hov: false;
+
+    height: 40px; border-radius: 5px;
+    background: hov ? #100618 : transparent;
+    animate background { duration: 120ms; }
+
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px; spacing: 10px; alignment: start;
+        Rectangle {
+            width: 24px; height: 24px; border-radius: 5px;
+            background: item.icon_color.transparentize(0.8);
+            Text { text: item.icon_letter; color: item.icon_color; font-size: 12px; font-weight: 900; }
+        }
+        VerticalLayout {
+            spacing: 1px; alignment: center; horizontal-stretch: 1;
+            Text { text: item.name; color: #c084fc; font-size: 11px; font-weight: 600; overflow: elide; }
+            Text {
+                text: (item.action == "install" ? "Installed" : item.action == "remove" ? "Removed" : "Updated") + " · " + item.when;
+                color: #3d1a60; font-size: 9px;
+            }
+        }
+    }
     TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        mouse-cursor: pointer; clicked => { root.clicked(); }
         pointer-event(e) => { root.hov = e.kind == PointerEventKind.move; }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// In-app notification banner
+// ═══════════════════════════════════════════════════════════════════════════════
+
+component NotificationBanner inherits Rectangle {
+    in property <string> message:     "";
+    in property <string> notif-type:  "info";   // info | success | warning | error
+    in property <bool>   visible-notif: false;
+    callback dismissed();
+
+    height: visible-notif ? 44px : 0px;
+    animate height { duration: 200ms; easing: ease-out; }
+    clip: true;
+
+    background: notif-type == "success" ? #081408 :
+                notif-type == "warning" ? #141000 :
+                notif-type == "error"   ? #140808 : #080418;
+    border-width: 0px;
+
+    // Bottom border as accent
+    Rectangle {
+        y: parent.height - 2px; height: 2px; width: parent.width;
+        background: notif-type == "success" ? #22c55e :
+                    notif-type == "warning" ? #f59e0b :
+                    notif-type == "error"   ? #ef4444 : #7c3aed;
+    }
+
+    HorizontalLayout {
+        padding-left: 20px; padding-right: 20px; spacing: 12px; alignment: start;
+        Text {
+            text: notif-type == "success" ? "●" :
+                  notif-type == "warning" ? "⚠" :
+                  notif-type == "error"   ? "✕" : "◈";
+            color: notif-type == "success" ? #22c55e :
+                   notif-type == "warning" ? #f59e0b :
+                   notif-type == "error"   ? #ef4444 : #7c3aed;
+            font-size: 14px; vertical-alignment: center;
+        }
+        Text {
+            text: root.message; horizontal-stretch: 1;
+            color: notif-type == "success" ? #4ade80 :
+                   notif-type == "warning" ? #fcd34d :
+                   notif-type == "error"   ? #fca5a5 : #c084fc;
+            font-size: 12px; font-weight: 600; vertical-alignment: center;
+        }
+        Rectangle {
+            width: 20px; height: 20px; border-radius: 10px; background: #1a0a2e;
+            Text { text: "✕"; color: #4c2080; font-size: 10px; }
+            TouchArea { mouse-cursor: pointer; clicked => { root.dismissed(); } }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Batch toolbar
+// ═══════════════════════════════════════════════════════════════════════════════
+
+component BatchToolbar inherits Rectangle {
+    in property <int> count: 0;
+    callback install();
+    callback remove();
+    callback update();
+    callback clear();
+    callback select-all();
+
+    height: 52px; background: #0e0428;
+    Rectangle { x: 0; y: 0; width: parent.width; height: 2px; background: @linear-gradient(90deg, #7c3aed, #d946ef); }
+
+    HorizontalLayout {
+        padding-left: 20px; padding-right: 20px; spacing: 12px; alignment: start;
+        HorizontalLayout {
+            spacing: 8px; alignment: start;
+            Rectangle { width: 24px; height: 24px; border-radius: 12px; background: #d946ef; Text { text: root.count; color: #fff; font-size: 12px; font-weight: 900; } }
+            Text { text: root.count == 1 ? "app selected" : "apps selected"; color: #c084fc; font-size: 12px; font-weight: 700; vertical-alignment: center; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        PillButton { label: "Select All"; active: false; clicked => { root.select-all(); } }
+        for btn in [
+            {label: "⊕  Install", action: "install", btn-color: #9333ea},
+            {label: "⟳  Update",  action: "update",  btn-color: #3b82f6},
+            {label: "⊗  Remove",  action: "remove",  btn-color: #ef4444},
+        ] : Rectangle {
+            height: 34px; width: 100px; border-radius: 6px;
+            border-width: 1px; border-color: btn.btn-color.transparentize(0.5);
+            private property <bool> hov: false;
+            background: hov ? btn.btn-color.transparentize(0.7) : btn.btn-color.transparentize(0.85);
+            animate background { duration: 110ms; }
+            Text { text: btn.label; color: btn.btn-color; font-size: 11px; font-weight: 700; }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    if btn.action == "install" { root.install(); }
+                    else if btn.action == "update" { root.update(); }
+                    else { root.remove(); }
+                }
+                pointer-event(e) => { parent.hov = e.kind == PointerEventKind.move; }
+            }
+        }
+        Rectangle {
+            width: 28px; height: 28px; border-radius: 14px; background: #1a0836; border-width: 1px; border-color: #2a1040;
+            Text { text: "✕"; color: #6b4a9e; font-size: 12px; }
+            TouchArea { mouse-cursor: pointer; clicked => { root.clear(); } }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Queue panel
+// ═══════════════════════════════════════════════════════════════════════════════
+
+component QueuePanel inherits Rectangle {
+    in property <[QueueEntry]> queue: [];
+    in property <bool>         visible-panel: false;
+    callback close();
+    callback cancel(string);
+    callback clear-done();
+
+    background: #07021a; border-width: 1px; border-color: #160830;
+
+    if visible-panel : VerticalLayout {
+        padding: 18px; spacing: 14px;
+        HorizontalLayout {
+            alignment: space-between;
+            Text { text: "INSTALL QUEUE"; color: #d946ef; font-size: 11px; font-weight: 900; letter-spacing: 2px; vertical-alignment: center; }
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    height: 26px; width: 80px; border-radius: 5px; background: #160830; border-width: 1px; border-color: #2a1040;
+                    Text { text: "Clear done"; color: #6b4a9e; font-size: 10px; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.clear-done(); } }
+                }
+                Rectangle {
+                    width: 24px; height: 24px; border-radius: 12px; background: #160830; border-width: 1px; border-color: #2a1040;
+                    Text { text: "✕"; color: #7c3aed; font-size: 11px; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.close(); } }
+                }
+            }
+        }
+        Divider { }
+        if queue.length == 0 : VerticalLayout {
+            alignment: center; spacing: 10px;
+            Text { text: "◈"; color: #160830; font-size: 40px; horizontal-alignment: center; }
+            Text { text: "Queue is empty"; color: #261440; font-size: 12px; horizontal-alignment: center; }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 8px;
+                for item in root.queue : Rectangle {
+                    height: 72px; border-radius: 7px;
+                    background: item.status == "running" ? #0f0428 : item.status == "done" ? #081408 : item.status == "error" ? #1a0408 : #0a0320;
+                    border-width: 1px;
+                    border-color: item.status == "running" ? #7c3aed : item.status == "done" ? #22c55e : item.status == "error" ? #ef4444 : #1e0f36;
+                    VerticalLayout {
+                        padding: 12px; spacing: 6px;
+                        HorizontalLayout {
+                            alignment: space-between;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: item.action == "install" ? "⊕" : item.action == "remove" ? "⊗" : "⟳";
+                                    color: item.action == "install" ? #d946ef : item.action == "remove" ? #ef4444 : #3b82f6;
+                                    font-size: 14px; vertical-alignment: center;
+                                }
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: item.name; color: #e9d5ff; font-size: 12px; font-weight: 700; }
+                                    Text {
+                                        text: item.status == "pending" ? "Waiting…" : item.status == "running" ? "In progress…" : item.status == "done" ? "Completed" : "Failed";
+                                        color: item.status == "done" ? #4ade80 : item.status == "error" ? #fca5a5 : #6b4a9e;
+                                        font-size: 10px;
+                                    }
+                                }
+                            }
+                            if item.status == "pending" : Rectangle {
+                                width: 22px; height: 22px; border-radius: 11px; background: #1a0836;
+                                Text { text: "✕"; color: #4c2080; font-size: 10px; }
+                                TouchArea { mouse-cursor: pointer; clicked => { root.cancel(item.app_id); } }
+                            }
+                        }
+                        if item.status == "running" : MiniProgress {
+                            value: item.progress;
+                            bar-color: item.action == "install" ? #d946ef : item.action == "remove" ? #ef4444 : #3b82f6;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Disk panel
+// ═══════════════════════════════════════════════════════════════════════════════
+
+component DiskPanel inherits Rectangle {
+    in property <[DiskUsageEntry]> usage: [];
+    in property <float>            total-mb: 0.0;
+    in property <float>            reclaimable-mb: 0.0;
+    in property <bool>             visible-panel: false;
+    callback close();
+    callback cleanup();
+
+    background: #07021a; border-width: 1px; border-color: #160830;
+
+    if visible-panel : VerticalLayout {
+        padding: 20px; spacing: 16px;
+        HorizontalLayout {
+            alignment: space-between;
+            Text { text: "DISK USAGE"; color: #d946ef; font-size: 11px; font-weight: 900; letter-spacing: 2px; vertical-alignment: center; }
+            Rectangle {
+                width: 24px; height: 24px; border-radius: 12px; background: #160830; border-width: 1px; border-color: #2a1040;
+                Text { text: "✕"; color: #7c3aed; font-size: 11px; }
+                TouchArea { mouse-cursor: pointer; clicked => { root.close(); } }
+            }
+        }
+        Divider { }
+        VerticalLayout {
+            spacing: 6px;
+            Text { text: "TOTAL"; color: #3d1a60; font-size: 9px; letter-spacing: 2px; }
+            Text {
+                text: total-mb >= 1000.0 ? (Math.round(total-mb / 100.0) / 10.0) + " GB" : total-mb + " MB";
+                color: #f0e6ff; font-size: 24px; font-weight: 900;
+            }
+        }
+        Rectangle {
+            height: 10px; border-radius: 5px; background: #1a0836;
+            for item[i] in root.usage : Rectangle {
+                x: i == 0 ? 0px : parent.width * 0.5;
+                width: root.total-mb > 0.0 ? parent.width * (item.mb / root.total-mb) : 0px;
+                height: parent.height; border-radius: parent.border-radius;
+                background: item.color;
+                animate width { duration: 400ms; easing: ease-out; }
+            }
+        }
+        VerticalLayout {
+            spacing: 8px;
+            for item in root.usage : HorizontalLayout {
+                spacing: 10px; alignment: start;
+                Rectangle { width: 10px; height: 10px; border-radius: 5px; background: item.color; y: 5px; }
+                Text { text: item.label; color: #8060a8; font-size: 12px; horizontal-stretch: 1; }
+                Text {
+                    text: item.mb >= 1000.0 ? (Math.round(item.mb / 100.0) / 10.0) + " GB" : item.mb + " MB";
+                    color: #c084fc; font-size: 12px; font-weight: 700;
+                }
+            }
+        }
+        Divider { }
+        if reclaimable-mb > 0.0 : Rectangle {
+            height: 40px; border-radius: 6px; background: #0c180a; border-width: 1px; border-color: #22c55e33;
+            HorizontalLayout {
+                padding-left: 14px; padding-right: 14px; spacing: 10px; alignment: space-between;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "◉"; color: #22c55e; font-size: 14px; vertical-alignment: center; }
+                    Text {
+                        text: (Math.round(reclaimable-mb * 10.0) / 10.0) + " MB reclaimable";
+                        color: #4ade80; font-size: 12px; font-weight: 700; vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    height: 28px; width: 70px; border-radius: 5px;
+                    private property <bool> hov: false;
+                    background: hov ? #22c55e : #16a34a;
+                    animate background { duration: 110ms; }
+                    Text { text: "Clean up"; color: #fff; font-size: 10px; font-weight: 700; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.cleanup(); }
+                        pointer-event(e) => { parent.hov = e.kind == PointerEventKind.move; } }
+                }
+            }
+        }
     }
 }
 
@@ -355,161 +1029,91 @@ component SidebarItem inherits Rectangle {
     border-width: selected ? 1px : 0px; border-color: #7c3aed22;
     animate background { duration: 120ms; }
 
-    if selected : Rectangle {
-        x: 0; y: 8px; width: 3px; height: parent.height - 16px;
-        border-radius: 2px;
-        background: @linear-gradient(180deg, #d946ef, #7c3aed);
-    }
+    if selected : Rectangle { x: 0; y: 8px; width: 3px; height: parent.height - 16px; border-radius: 2px; background: @linear-gradient(180deg, #d946ef, #7c3aed); }
 
     HorizontalLayout {
         padding-left: 14px; padding-right: 10px; spacing: 10px; alignment: start;
-        Text {
-            text: root.icon; font-size: 14px;
-            color: selected ? #d946ef : #6b4a9e; vertical-alignment: center;
-        }
-        Text {
-            text: root.label; font-size: 12px;
-            font-weight: selected ? 700 : 400;
-            color: selected ? #e9d5ff : #8b5cf6;
-            vertical-alignment: center; horizontal-stretch: 1;
-        }
+        Text { text: root.icon; font-size: 14px; color: selected ? #d946ef : #6b4a9e; vertical-alignment: center; }
+        Text { text: root.label; font-size: 12px; font-weight: selected ? 700 : 400; color: selected ? #e9d5ff : #8b5cf6; vertical-alignment: center; horizontal-stretch: 1; }
         if root.count > 0 : Rectangle {
-            width: 22px; height: 16px; border-radius: 8px; background: #7c3aed44;
-            border-width: 1px; border-color: #7c3aed;
+            width: 22px; height: 16px; border-radius: 8px; background: #7c3aed44; border-width: 1px; border-color: #7c3aed;
             HorizontalLayout {
                 alignment: center;
-                Text {
-                    text: root.count > 99 ? "99+" : root.count;
-                    color: #c084fc; font-size: 9px; font-weight: 700; vertical-alignment: center;
-                }
+                Text { text: root.count > 99 ? "99+" : root.count; color: #c084fc; font-size: 9px; font-weight: 700; vertical-alignment: center; }
             }
         }
     }
     TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        mouse-cursor: pointer; clicked => { root.clicked(); }
         pointer-event(e) => { root.hov = e.kind == PointerEventKind.move; }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Search bar with autocomplete dropdown
+// Search bar
 // ═══════════════════════════════════════════════════════════════════════════════
 
 component SearchBar inherits Rectangle {
-    in-out property <string>            search-text:   "";
-    in     property <[SuggestionEntry]> suggestions:   [];
-    in     property <bool>              show-dropdown: false;
+    in-out property <string> search-text: "";
     callback text-changed(string);
-    callback suggestion-picked(string);   // app_id or raw query
     callback dismissed();
-
     private property <bool> focused: false;
 
-    height: 44px;
-    border-radius: 7px; background: #0b0418;
+    height: 44px; border-radius: 7px; background: #0b0418;
     border-width: 2px;
     border-color: focused ? #7c3aed : (search-text != "" ? #4c2080 : #1a0836);
+    drop-shadow-blur: focused ? 10px : 0px; drop-shadow-color: #7c3aed44;
     animate border-color { duration: 150ms; }
-
-    // Drop-shadow glow when focused
-    drop-shadow-blur:  focused ? 10px : 0px;
-    drop-shadow-color: #7c3aed44;
     animate drop-shadow-blur { duration: 150ms; }
 
     HorizontalLayout {
         padding-left: 14px; padding-right: 12px; spacing: 10px;
-
-        Text {
-            text: "⌕"; font-size: 20px; vertical-alignment: center;
-            color: focused ? #9333ea : #4c2080;
-            animate color { duration: 150ms; }
-        }
-
+        Text { text: "⌕"; font-size: 20px; vertical-alignment: center; color: focused ? #9333ea : #4c2080; animate color { duration: 150ms; } }
         Rectangle {
             horizontal-stretch: 1;
             if root.search-text == "" : Text {
-                text: "Search apps, packages, developers…";
-                color: #261440; font-size: 13px; vertical-alignment: center;
-                x: 0; y: 0; width: parent.width; height: parent.height;
+                text: "Search apps, packages, developers…"; color: #261440;
+                font-size: 13px; vertical-alignment: center; x: 0; y: 0; width: parent.width; height: parent.height;
             }
             TextInput {
-                text <=> root.search-text;
-                color: #e9d5ff; font-size: 13px; vertical-alignment: center;
-                edited => {
-                    root.focused = true;
-                    root.text-changed(self.text);
-                    StoreLogic.search_changed(self.text);
-                }
+                text <=> root.search-text; color: #e9d5ff; font-size: 13px; vertical-alignment: center;
+                edited => { root.focused = true; root.text-changed(self.text); StoreLogic.search_changed(self.text); }
                 accepted => { root.dismissed(); }
             }
         }
-
-        // Spinner (shown while searching)
-        if root.show-dropdown && root.suggestions.length == 0 && root.search-text != "" : Text {
-            text: "⟳"; color: #4c2080; font-size: 16px; vertical-alignment: center;
-        }
-
         if root.search-text != "" : Rectangle {
             width: 22px; height: 22px; border-radius: 11px; background: #1e0f36;
             Text { text: "✕"; color: #9333ea; font-size: 11px; }
             TouchArea {
                 mouse-cursor: pointer;
-                clicked => {
-                    root.search-text = "";
-                    root.text-changed("");
-                    StoreLogic.search_changed("");
-                    root.dismissed();
-                }
+                clicked => { root.search-text = ""; root.text-changed(""); StoreLogic.search_changed(""); root.dismissed(); }
             }
         }
     }
 }
 
-// Suggestion dropdown (rendered in MainWindow as overlay)
 component SuggestionDropdown inherits Rectangle {
     in property <[SuggestionEntry]> suggestions: [];
-    callback picked(string);    // app_id
+    callback picked(string);
 
-    background: #0d0422;
-    border-width: 1px; border-color: #7c3aed44;
-    border-radius: 8px;
-    drop-shadow-blur: 20px; drop-shadow-color: #00000088;
-    clip: true;
+    background: #0d0422; border-width: 1px; border-color: #7c3aed44;
+    border-radius: 8px; drop-shadow-blur: 20px; drop-shadow-color: #00000088; clip: true;
 
     VerticalLayout {
-        spacing: 0px;
         for sug[i] in root.suggestions : Rectangle {
             height: 38px;
             private property <bool> hov: false;
             background: hov ? #1a0a2e : transparent;
             animate background { duration: 100ms; }
-
             HorizontalLayout {
                 padding-left: 16px; padding-right: 14px; spacing: 12px; alignment: start;
-
-                Text {
-                    text: sug.is_recent ? "⟳" : "⌕";
-                    color: sug.is_recent ? #4c2080 : #6b4a9e;
-                    font-size: 13px; vertical-alignment: center;
-                }
-                Text {
-                    text: sug.text; color: #c084fc;
-                    font-size: 12px; vertical-alignment: center; horizontal-stretch: 1;
-                }
-                if sug.is_recent : Text {
-                    text: "recent"; color: #3d1a60; font-size: 10px; vertical-alignment: center;
-                }
+                Text { text: sug.is_recent ? "⟳" : "⌕"; color: sug.is_recent ? #4c2080 : #6b4a9e; font-size: 13px; vertical-alignment: center; }
+                Text { text: sug.text; color: #c084fc; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
+                if sug.is_recent : Text { text: "recent"; color: #3d1a60; font-size: 10px; vertical-alignment: center; }
             }
-
-            // Thin divider except last
-            if i < root.suggestions.length - 1 : Rectangle {
-                y: parent.height - 1px; height: 1px; background: #160830;
-            }
-
+            if i < root.suggestions.length - 1 : Rectangle { y: parent.height - 1px; height: 1px; background: #160830; }
             TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.picked(sug.app_id != "" ? sug.app_id : sug.text); }
+                mouse-cursor: pointer; clicked => { root.picked(sug.app_id != "" ? sug.app_id : sug.text); }
                 pointer-event(e) => { parent.hov = e.kind == PointerEventKind.move; }
             }
         }
@@ -517,46 +1121,38 @@ component SuggestionDropdown inherits Rectangle {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Sort / filter toolbar
+// Sort bar
 // ═══════════════════════════════════════════════════════════════════════════════
 
 component SortBar inherits HorizontalLayout {
     in property <string> current-sort: "installs";
+    in property <int>    selected-count: 0;
     callback sort-picked(string);
+    callback toggle-batch-mode();
 
-    spacing: 8px; alignment: start; padding-left: 2px;
-
-    Text {
-        text: "Sort:"; color: #3d1a60; font-size: 11px;
-        vertical-alignment: center; padding-right: 4px;
-    }
-
-    for opt in [
-        {id: "installs", label: "Popular"},
-        {id: "name",     label: "Name A–Z"},
-        {id: "rating",   label: "Rating"},
-        {id: "size",     label: "Size"},
-        {id: "recent",   label: "Recent"},
-    ] : PillButton {
-        label: opt.label;
-        active: root.current-sort == opt.id;
+    spacing: 8px; alignment: start;
+    Text { text: "Sort:"; color: #3d1a60; font-size: 11px; vertical-alignment: center; }
+    for opt in [{id: "installs", label: "Popular"},{id: "name", label: "A–Z"},{id: "rating", label: "Rating"},{id: "size", label: "Size"}] : PillButton {
+        label: opt.label; active: root.current-sort == opt.id;
         clicked => { root.sort-picked(opt.id); }
     }
+    Rectangle { horizontal-stretch: 1; }
+    PillButton { label: "☑  Select"; active: root.selected-count > 0; clicked => { root.toggle-batch-mode(); } }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Detail panel
+// Detail panel (3 tabs: Info / Permissions / Changelog)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 component DetailPanel inherits Rectangle {
     in property <AppEntry> app;
     in property <bool>     visible-panel: false;
+    in-out property <int>  active-tab: 0;
     callback close();
     callback action();
     callback update();
 
-    background: #07021a;
-    border-width: 1px; border-color: #160830;
+    background: #07021a; border-width: 1px; border-color: #160830;
 
     if !visible-panel : VerticalLayout {
         alignment: center; spacing: 14px;
@@ -564,31 +1160,23 @@ component DetailPanel inherits Rectangle {
         Text { text: "Select an app to view details"; color: #261440; font-size: 13px; horizontal-alignment: center; }
     }
 
-    if visible-panel : ScrollView {
-        VerticalLayout {
-            padding: 22px; spacing: 16px;
+    if visible-panel : VerticalLayout {
+        spacing: 0px;
 
-            // Close
+        VerticalLayout {
+            padding: 18px; spacing: 12px;
             HorizontalLayout {
                 alignment: end;
                 Rectangle {
-                    width: 28px; height: 28px; border-radius: 14px;
-                    background: #160830; border-width: 1px; border-color: #2a1040;
+                    width: 28px; height: 28px; border-radius: 14px; background: #160830; border-width: 1px; border-color: #2a1040;
                     Text { text: "✕"; color: #7c3aed; font-size: 12px; }
                     TouchArea { mouse-cursor: pointer; clicked => { root.close(); } }
                 }
             }
-
-            // Hero icon
-            HorizontalLayout {
-                alignment: center;
-                AppIcon { letter: app.icon_letter; accent: app.icon_color; sz: 80px; }
-            }
-
-            // Name + dev + stars
+            HorizontalLayout { alignment: center; AppIcon { letter: app.icon_letter; accent: app.icon_color; sz: 72px; } }
             VerticalLayout {
                 spacing: 4px;
-                Text { text: app.name; color: #f0e6ff; font-size: 20px; font-weight: 900; horizontal-alignment: center; }
+                Text { text: app.name; color: #f0e6ff; font-size: 19px; font-weight: 900; horizontal-alignment: center; }
                 Text { text: app.developer; color: #7c3aed; font-size: 12px; horizontal-alignment: center; }
                 HorizontalLayout {
                     alignment: center; spacing: 8px;
@@ -596,125 +1184,147 @@ component DetailPanel inherits Rectangle {
                     Text { text: app.rating + " / 5"; color: #6b4a9e; font-size: 10px; vertical-alignment: center; }
                 }
             }
-
-            // Installed status banner
             Rectangle {
-                height: 34px; border-radius: 6px;
+                height: 32px; border-radius: 6px;
                 background: app.is_installed ? #0b1f0d : #090316;
                 border-width: 1px; border-color: app.is_installed ? #22c55e33 : #1e0f36;
                 HorizontalLayout {
                     padding-left: 14px; spacing: 8px; alignment: start;
-                    Text {
-                        text: app.is_installed ? "●" : "○";
-                        color: app.is_installed ? #22c55e : #3d1a60;
-                        font-size: 13px; vertical-alignment: center;
-                    }
-                    Text {
-                        text: app.is_installed ? "Installed" : "Not installed";
-                        color: app.is_installed ? #4ade80 : #6b4a9e;
-                        font-size: 11px; font-weight: 700; vertical-alignment: center;
-                    }
-                    if app.is_updating : Text {
-                        text: "  (update available)"; color: #d946ef;
-                        font-size: 11px; vertical-alignment: center;
-                    }
+                    Text { text: app.is_installed ? "●" : "○"; color: app.is_installed ? #22c55e : #3d1a60; font-size: 13px; vertical-alignment: center; }
+                    Text { text: app.is_installed ? "Installed" : "Not installed"; color: app.is_installed ? #4ade80 : #6b4a9e; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                    if app.is_updating : Text { text: "  · update available"; color: #d946ef; font-size: 10px; vertical-alignment: center; }
                 }
             }
-
-            Divider { }
-
-            // Stats
             HorizontalLayout {
                 spacing: 0px;
                 for stat in [
                     {label: "VERSION",  value: app.version},
-                    {label: "SIZE",     value: app.size_mb > 0.0 ? app.size_mb + " MB" : "—"},
+                    {label: "SIZE",     value: app.installed_size > 0.0 ? app.installed_size + " MB" : (app.size_mb > 0.0 ? app.size_mb + " MB" : "—")},
                     {label: "INSTALLS", value: app.download_count},
                 ] : VerticalLayout {
-                    horizontal-stretch: 1; spacing: 4px; alignment: center;
+                    horizontal-stretch: 1; spacing: 3px; alignment: center;
                     Text { text: stat.label; color: #2e1050; font-size: 9px; letter-spacing: 1.5px; horizontal-alignment: center; }
-                    Text { text: stat.value; color: #c084fc; font-size: 12px; font-weight: 700; horizontal-alignment: center; }
+                    Text { text: stat.value; color: #c084fc; font-size: 11px; font-weight: 700; horizontal-alignment: center; }
                 }
             }
-
-            Divider { }
-
-            // Badges
+            // Tabs
             HorizontalLayout {
-                spacing: 8px; alignment: center;
-                Badge { text: app.category; badge-color: #7c3aed; }
-                Badge {
-                    text: app.backend == "bootc" ? "SYSTEM / bootc" : "Flathub";
-                    badge-color: app.backend == "bootc" ? #16a34a : #3b82f6;
+                spacing: 0px;
+                for tab[ti] in ["Info", "Permissions", "Changelog"] : Rectangle {
+                    horizontal-stretch: 1; height: 34px;
+                    background: root.active-tab == ti ? #0f0428 : transparent;
+                    Rectangle { y: parent.height - 2px; height: 2px; width: parent.width; background: root.active-tab == ti ? #d946ef : #160830; animate background { duration: 120ms; } }
+                    Text { text: tab; color: root.active-tab == ti ? #e9d5ff : #4c2080; font-size: 11px; font-weight: root.active-tab == ti ? 700 : 400; animate color { duration: 120ms; } }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.active-tab = ti; } }
                 }
             }
+        }
 
-            // Description
+        Divider { }
+
+        ScrollView {
+            vertical-stretch: 1;
             VerticalLayout {
-                spacing: 8px;
-                Text { text: "ABOUT"; color: #2e1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
-                Text { text: app.description; color: #8060a8; font-size: 12px; wrap: word-wrap; }
-            }
+                padding: 18px; spacing: 14px;
 
-            // Package ID
-            Rectangle {
-                height: 30px; border-radius: 4px; background: #050110;
-                border-width: 1px; border-color: #160830;
-                HorizontalLayout {
-                    padding-left: 10px; padding-right: 10px; spacing: 8px;
-                    Text {
-                        text: app.backend == "bootc" ? "⊞" : "◈";
-                        color: app.backend == "bootc" ? #16a34a : #3b82f6;
-                        font-size: 11px; vertical-alignment: center;
+                if root.active-tab == 0 : VerticalLayout {
+                    spacing: 14px;
+                    HorizontalLayout { spacing: 8px; alignment: start; Badge { text: app.category; badge-color: #7c3aed; } Badge { text: app.backend == "bootc" ? "rpm-ostree" : "Flathub"; badge-color: app.backend == "bootc" ? #16a34a : #3b82f6; } }
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text { text: "ABOUT"; color: #2e1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
+                        Text { text: app.description; color: #8060a8; font-size: 12px; wrap: word-wrap; }
                     }
-                    Text { text: app.flatpak_id; color: #2e4a6e; font-size: 10px; vertical-alignment: center; overflow: elide; }
+                    Rectangle {
+                        height: 30px; border-radius: 4px; background: #050110; border-width: 1px; border-color: #160830;
+                        HorizontalLayout {
+                            padding-left: 10px; padding-right: 10px; spacing: 8px;
+                            Text { text: app.backend == "bootc" ? "⊞" : "◈"; color: app.backend == "bootc" ? #16a34a : #3b82f6; font-size: 11px; vertical-alignment: center; }
+                            Text { text: app.flatpak_id; color: #2e4a6e; font-size: 10px; vertical-alignment: center; overflow: elide; }
+                        }
+                    }
+                    if app.website != "" : Rectangle {
+                        height: 30px; border-radius: 4px; background: #050110; border-width: 1px; border-color: #160830;
+                        HorizontalLayout {
+                            padding-left: 10px; spacing: 8px;
+                            Text { text: "⊕"; color: #3b82f6; font-size: 11px; vertical-alignment: center; }
+                            Text { text: app.website; color: #2e4a6e; font-size: 10px; vertical-alignment: center; overflow: elide; }
+                        }
+                    }
+                    if app.backend == "bootc" : Rectangle {
+                        height: 38px; border-radius: 5px; background: #060f06; border-width: 1px; border-color: #16a34a22;
+                        HorizontalLayout {
+                            padding-left: 12px; spacing: 10px; alignment: start;
+                            Text { text: "⚠"; color: #16a34a; font-size: 13px; vertical-alignment: center; }
+                            Text { text: "Reboot required after install/remove"; color: #4ade80; font-size: 10px; vertical-alignment: center; }
+                        }
+                    }
+                }
+
+                if root.active-tab == 1 : VerticalLayout {
+                    spacing: 10px;
+                    if app.permissions.length == 0 : VerticalLayout {
+                        spacing: 8px;
+                        Text { text: "◈"; color: #160830; font-size: 32px; horizontal-alignment: center; }
+                        Text { text: app.backend == "bootc" ? "System package — no Flatpak sandbox" : "No permission data yet"; color: #261440; font-size: 12px; horizontal-alignment: center; }
+                    }
+                    for perm in app.permissions : Rectangle {
+                        height: 36px; border-radius: 5px;
+                        background: perm == "Webcam" || perm == "Microphone" ? #1a0505 : perm == "Filesystem" ? #1a1205 : #080420;
+                        border-width: 1px;
+                        border-color: (perm == "Network" ? #3b82f6 : perm == "Filesystem" ? #f59e0b : perm == "Webcam" ? #ef4444 : perm == "Microphone" ? #ef4444 : perm == "Location" ? #22c55e : perm == "Notifications" ? #a855f7 : #6b7280).transparentize(0.5);
+                        HorizontalLayout {
+                            padding-left: 12px; spacing: 10px; alignment: start;
+                            Text {
+                                text: perm == "Network" ? "⊕" : perm == "Filesystem" ? "◉" : perm == "Webcam" ? "◎" : perm == "Microphone" ? "◈" : perm == "Location" ? "⊞" : "▸";
+                                color: perm == "Network" ? #3b82f6 : perm == "Filesystem" ? #f59e0b : perm == "Webcam" ? #ef4444 : perm == "Microphone" ? #ef4444 : perm == "Location" ? #22c55e : #6b7280;
+                                font-size: 14px; vertical-alignment: center;
+                            }
+                            Text {
+                                text: perm;
+                                color: perm == "Network" ? #3b82f6 : perm == "Filesystem" ? #f59e0b : perm == "Webcam" ? #ef4444 : perm == "Microphone" ? #ef4444 : perm == "Location" ? #22c55e : #6b7280;
+                                font-size: 11px; font-weight: 700; vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                if root.active-tab == 2 : VerticalLayout {
+                    spacing: 10px;
+                    if app.changelog == "" : VerticalLayout {
+                        spacing: 8px;
+                        Text { text: "◈"; color: #160830; font-size: 32px; horizontal-alignment: center; }
+                        Text { text: "No changelog available"; color: #261440; font-size: 12px; horizontal-alignment: center; }
+                    }
+                    if app.changelog != "" : VerticalLayout {
+                        spacing: 8px;
+                        Text { text: "RELEASE NOTES"; color: #2e1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
+                        Text { text: app.changelog; color: #8060a8; font-size: 12px; wrap: word-wrap; }
+                    }
                 }
             }
+        }
 
-            // Reboot warning (bootc)
-            if app.backend == "bootc" : Rectangle {
-                height: 40px; border-radius: 5px; background: #060f06;
-                border-width: 1px; border-color: #16a34a22;
-                HorizontalLayout {
-                    padding-left: 12px; spacing: 10px; alignment: start;
-                    Text { text: "⚠"; color: #16a34a; font-size: 14px; vertical-alignment: center; }
-                    Text { text: "Reboot required after install/remove"; color: #4ade80; font-size: 10px; vertical-alignment: center; }
-                }
-            }
-
-            // Update button (shown when installed AND update available)
-            if app.is_installed && app.is_updating : Rectangle {
-                height: 40px; border-radius: 7px;
-                background: @linear-gradient(135deg, #1a3a6e, #0d1f42);
-                border-width: 1px; border-color: #3b82f6;
+        VerticalLayout {
+            padding: 14px; spacing: 8px;
+            if app.is_updating : Rectangle {
+                height: 38px; border-radius: 6px; background: #001228; border-width: 1px; border-color: #3b82f6;
                 HorizontalLayout {
                     spacing: 10px; alignment: center;
-                    Text { text: "⟳"; color: #93c5fd; font-size: 16px; vertical-alignment: center; }
-                    Text { text: "UPDATE AVAILABLE — APPLY NOW"; color: #93c5fd; font-size: 11px; font-weight: 700; letter-spacing: 1px; vertical-alignment: center; }
+                    Text { text: "⟳"; color: #93c5fd; font-size: 15px; vertical-alignment: center; }
+                    Text { text: "UPDATE AVAILABLE"; color: #93c5fd; font-size: 10px; font-weight: 700; letter-spacing: 1px; vertical-alignment: center; }
                 }
                 TouchArea { mouse-cursor: pointer; clicked => { root.update(); } }
             }
-
-            // Main action button
             Rectangle {
-                height: 48px; border-radius: 8px;
-                background: app.is_installed
-                    ? @linear-gradient(135deg, #3b0f6e, #1a0740)
-                    : @linear-gradient(135deg, #9333ea, #d946ef);
-                border-width: 2px;
-                border-color: app.is_installed ? #7c3aed : #f0abfc;
-                drop-shadow-blur: app.is_installed ? 0px : 14px;
-                drop-shadow-color: #d946ef44;
+                height: 46px; border-radius: 8px;
+                background: app.is_installed ? @linear-gradient(135deg, #3b0f6e, #1a0740) : @linear-gradient(135deg, #9333ea, #d946ef);
+                border-width: 2px; border-color: app.is_installed ? #7c3aed : #f0abfc;
+                drop-shadow-blur: app.is_installed ? 0px : 12px; drop-shadow-color: #d946ef44;
                 HorizontalLayout {
                     spacing: 10px; alignment: center;
-                    Text {
-                        text: app.is_installed ? "⊗" : "⊕";
-                        color: #fff; font-size: 18px; vertical-alignment: center;
-                    }
-                    Text {
-                        text: app.is_installed ? "REMOVE APPLICATION" : "INSTALL APPLICATION";
-                        color: #fff; font-size: 13px; font-weight: 700; letter-spacing: 1.5px; vertical-alignment: center;
-                    }
+                    Text { text: app.is_installed ? "⊗" : "⊕"; color: #fff; font-size: 17px; vertical-alignment: center; }
+                    Text { text: app.is_installed ? "REMOVE APPLICATION" : "INSTALL APPLICATION"; color: #fff; font-size: 12px; font-weight: 700; letter-spacing: 1.5px; vertical-alignment: center; }
                 }
                 TouchArea { mouse-cursor: pointer; clicked => { root.action(); } }
             }
@@ -723,66 +1333,27 @@ component DetailPanel inherits Rectangle {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Progress toast
-// ═══════════════════════════════════════════════════════════════════════════════
-
-component ProgressToast inherits Rectangle {
-    in property <string> app-name:     "";
-    in property <float>  progress:     0.0;
-    in property <bool>   visible-toast: false;
-    in property <string> status-msg:   "";
-
-    width: 320px; height: 90px; border-radius: 10px;
-    background: #0d0422; border-width: 1px; border-color: #7c3aed;
-    drop-shadow-blur: 24px; drop-shadow-color: #7c3aed44;
-    opacity: visible-toast ? 1.0 : 0.0;
-    animate opacity { duration: 220ms; easing: ease-in-out; }
-
-    VerticalLayout {
-        padding: 14px; spacing: 8px;
-        HorizontalLayout {
-            alignment: space-between;
-            Text {
-                text: status-msg != "" ? status-msg : "Installing " + app-name + "…";
-                color: #e9d5ff; font-size: 12px; font-weight: 700; overflow: elide;
-                horizontal-stretch: 1;
-            }
-            Text { text: Math.round(progress * 100) + "%"; color: #d946ef; font-size: 11px; font-weight: 700; }
-        }
-        Rectangle {
-            height: 6px; border-radius: 3px; background: #1a0836;
-            Rectangle {
-                width: parent.width * root.progress; height: 6px; border-radius: 3px;
-                background: @linear-gradient(90deg, #7c3aed, #d946ef);
-                animate width { duration: 200ms; easing: ease-out; }
-            }
-        }
-        if status-msg != "" : Text {
-            text: status-msg; color: #6b4a9e; font-size: 10px; horizontal-alignment: right;
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Top bar
+// Top bar (v0.5: added bootc + remotes buttons)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 component TopBar inherits Rectangle {
     in property <int>  installed-count: 0;
     in property <int>  updates-count:   0;
+    in property <int>  queue-count:     0;
+    in property <bool> reboot-pending:  false;
     callback updates-clicked();
     callback refresh-clicked();
+    callback queue-clicked();
+    callback disk-clicked();
+    callback bootc-clicked();
+    callback remotes-clicked();
 
     height: 58px; background: #050110;
-    Rectangle {
-        y: parent.height - 1px; width: parent.width; height: 1px;
-        background: @linear-gradient(90deg, #7c3aed55, #d946ef99, #3b82f644);
-    }
+    Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: @linear-gradient(90deg, #7c3aed55, #d946ef99, #3b82f644); }
 
     HorizontalLayout {
-        padding-left: 20px; padding-right: 20px; spacing: 16px; alignment: space-between;
+        padding-left: 20px; padding-right: 20px; spacing: 10px; alignment: space-between;
 
-        // Logo
         HorizontalLayout {
             spacing: 12px; alignment: start;
             Rectangle {
@@ -793,41 +1364,75 @@ component TopBar inherits Rectangle {
             VerticalLayout {
                 alignment: center; spacing: 0px;
                 Text { text: "LEGENDARYOS"; color: #d946ef; font-size: 14px; font-weight: 900; letter-spacing: 3px; }
-                Text { text: "STORE  v0.3"; color: #7c3aed; font-size: 9px; font-weight: 700; letter-spacing: 4px; }
+                Text { text: "STORE  v0.5"; color: #7c3aed; font-size: 9px; font-weight: 700; letter-spacing: 4px; }
             }
         }
 
         HorizontalLayout {
-            spacing: 10px; alignment: end;
+            spacing: 8px; alignment: end;
 
-            // Refresh button
+            // Reboot pending indicator
+            if reboot-pending : Rectangle {
+                height: 34px; width: 36px; border-radius: 6px; background: #1a0f00; border-width: 1px; border-color: #f59e0b;
+                drop-shadow-blur: 6px; drop-shadow-color: #f59e0b44;
+                Text { text: "⚠"; color: #f59e0b; font-size: 15px; }
+            }
+
+            // bootc status
             Rectangle {
-                width: 36px; height: 34px; border-radius: 6px;
-                background: #0d0619; border-width: 1px; border-color: #1e0f36;
+                height: 34px; width: 36px; border-radius: 6px; background: #0d0619; border-width: 1px; border-color: #16a34a33;
+                Text { text: "◎"; color: #16a34a; font-size: 14px; }
+                TouchArea { mouse-cursor: pointer; clicked => { root.bootc-clicked(); } }
+            }
+
+            // remotes
+            Rectangle {
+                height: 34px; width: 36px; border-radius: 6px; background: #0d0619; border-width: 1px; border-color: #3b82f633;
+                Text { text: "⊕"; color: #3b82f6; font-size: 14px; }
+                TouchArea { mouse-cursor: pointer; clicked => { root.remotes-clicked(); } }
+            }
+
+            // disk
+            Rectangle {
+                height: 34px; width: 36px; border-radius: 6px; background: #0d0619; border-width: 1px; border-color: #1e0f36;
+                Text { text: "◉"; color: #6b4a9e; font-size: 14px; }
+                TouchArea { mouse-cursor: pointer; clicked => { root.disk-clicked(); } }
+            }
+
+            // refresh
+            Rectangle {
+                height: 34px; width: 36px; border-radius: 6px; background: #0d0619; border-width: 1px; border-color: #1e0f36;
                 Text { text: "⟳"; color: #6b4a9e; font-size: 16px; }
                 TouchArea { mouse-cursor: pointer; clicked => { root.refresh-clicked(); } }
             }
 
-            // Updates badge
+            // queue
+            if queue-count > 0 : Rectangle {
+                height: 34px; width: 100px; border-radius: 6px; background: #1a0a2e; border-width: 1px; border-color: #f59e0b;
+                drop-shadow-blur: 6px; drop-shadow-color: #f59e0b33;
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px; alignment: center;
+                    Rectangle { width: 18px; height: 18px; border-radius: 9px; background: #f59e0b; Text { text: queue-count; color: #000; font-size: 10px; font-weight: 900; } }
+                    Text { text: "QUEUE"; color: #f59e0b; font-size: 10px; font-weight: 700; letter-spacing: 1px; vertical-alignment: center; }
+                }
+                TouchArea { mouse-cursor: pointer; clicked => { root.queue-clicked(); } }
+            }
+
+            // updates
             if updates-count > 0 : Rectangle {
-                height: 34px; width: 120px; border-radius: 6px;
-                background: #1a0a2e; border-width: 1px; border-color: #d946ef;
+                height: 34px; width: 100px; border-radius: 6px; background: #1a0a2e; border-width: 1px; border-color: #d946ef;
                 drop-shadow-blur: 8px; drop-shadow-color: #d946ef33;
                 HorizontalLayout {
                     padding-left: 10px; padding-right: 10px; spacing: 8px; alignment: center;
-                    Rectangle {
-                        width: 18px; height: 18px; border-radius: 9px; background: #d946ef;
-                        Text { text: updates-count; color: #fff; font-size: 10px; font-weight: 900; }
-                    }
+                    Rectangle { width: 18px; height: 18px; border-radius: 9px; background: #d946ef; Text { text: updates-count; color: #fff; font-size: 10px; font-weight: 900; } }
                     Text { text: "UPDATES"; color: #d946ef; font-size: 10px; font-weight: 700; letter-spacing: 1px; vertical-alignment: center; }
                 }
                 TouchArea { mouse-cursor: pointer; clicked => { root.updates-clicked(); } }
             }
 
-            // Installed count
+            // installed
             Rectangle {
-                height: 34px; width: 120px; border-radius: 6px;
-                background: #0d0619; border-width: 1px; border-color: #1e0f36;
+                height: 34px; width: 100px; border-radius: 6px; background: #0d0619; border-width: 1px; border-color: #1e0f36;
                 HorizontalLayout {
                     padding-left: 10px; spacing: 8px; alignment: center;
                     Text { text: "⊞"; color: #7c3aed; font-size: 14px; vertical-alignment: center; }
@@ -839,28 +1444,57 @@ component TopBar inherits Rectangle {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Load more button
+// Progress toast
 // ═══════════════════════════════════════════════════════════════════════════════
 
+component ProgressToast inherits Rectangle {
+    in property <string> app-name:      "";
+    in property <float>  progress:      0.0;
+    in property <bool>   visible-toast: false;
+    in property <string> status-msg:    "";
+    in property <int>    queue-count:   0;
+
+    width: 320px; height: 94px; border-radius: 10px;
+    background: #0d0422; border-width: 1px; border-color: #7c3aed;
+    drop-shadow-blur: 24px; drop-shadow-color: #7c3aed44;
+    opacity: visible-toast ? 1.0 : 0.0;
+    animate opacity { duration: 220ms; easing: ease-in-out; }
+
+    VerticalLayout {
+        padding: 14px; spacing: 8px;
+        HorizontalLayout {
+            alignment: space-between;
+            Text { text: status-msg != "" ? status-msg : "Installing " + app-name + "…"; color: #e9d5ff; font-size: 12px; font-weight: 700; overflow: elide; horizontal-stretch: 1; }
+            Text { text: Math.round(progress * 100) + "%"; color: #d946ef; font-size: 11px; font-weight: 700; }
+        }
+        MiniProgress { value: root.progress; bar-color: #d946ef; }
+        if queue-count > 1 : HorizontalLayout {
+            spacing: 6px;
+            Text { text: "◈"; color: #4c2080; font-size: 10px; vertical-alignment: center; }
+            Text { text: (queue-count - 1) + " more in queue"; color: #4c2080; font-size: 10px; vertical-alignment: center; }
+        }
+    }
+}
+
+// Load more
 component LoadMoreButton inherits Rectangle {
-    in property <bool>   loading-more: false;
-    in property <int>    remaining:    0;
+    in property <bool> loading-more: false;
+    in property <int>  remaining:    0;
     callback clicked();
     private property <bool> hov: false;
 
     height: 48px; border-radius: 8px;
     background: hov ? #1a0a2e : #0d0619;
     border-width: 1px; border-color: hov ? #7c3aed : #2a1040;
-    animate background   { duration: 120ms; }
+    animate background { duration: 120ms; }
     animate border-color { duration: 120ms; }
 
     HorizontalLayout {
         spacing: 12px; alignment: center;
         if loading-more : Text { text: "⟳"; color: #7c3aed; font-size: 18px; vertical-alignment: center; }
         Text {
-            text: loading-more ? "Loading…" : ("Load more  (" + remaining + " remaining)");
-            color: hov ? #d946ef : #7c3aed;
-            font-size: 13px; font-weight: 700; letter-spacing: 0.5px; vertical-alignment: center;
+            text: loading-more ? "Loading…" : "Load more  (" + remaining + " remaining)";
+            color: hov ? #d946ef : #7c3aed; font-size: 13px; font-weight: 700; letter-spacing: 0.5px; vertical-alignment: center;
             animate color { duration: 120ms; }
         }
     }
@@ -878,30 +1512,57 @@ component LoadMoreButton inherits Rectangle {
 export component MainWindow inherits Window {
     title: "LegendaryOS Store";
     min-width: 1100px; min-height: 700px;
-    preferred-width: 1280px; preferred-height: 840px;
+    preferred-width: 1340px; preferred-height: 860px;
     background: #070213;
 
-    // ── State properties ──────────────────────────────────────────────────────
+    // ── State ─────────────────────────────────────────────────────────────────
     in-out property <[AppEntry]>        apps:              [];
     in-out property <[AppEntry]>        featured-apps:     [];
     in-out property <[CategoryEntry]>   categories:        [];
     in-out property <[SuggestionEntry]> suggestions:       [];
+    in-out property <[RecentEntry]>     recent-activity:   [];
     in-out property <string>            selected-category: "all";
     in-out property <string>            search-text:       "";
     in-out property <string>            current-sort:      "installs";
     in-out property <AppEntry>          selected-app;
     in-out property <bool>              detail-visible:    false;
+    in-out property <int>               detail-tab:        0;
     in-out property <int>               installed-count:   0;
     in-out property <int>               updates-count:     0;
-    in-out property <bool>              toast-visible:     false;
-    in-out property <string>            toast-app:         "";
-    in-out property <float>             toast-progress:    0.0;
-    in-out property <string>            toast-status:      "";
     in-out property <bool>              loading:           true;
     in-out property <bool>              loading-more:      false;
     in-out property <int>               total-count:       0;
     in-out property <bool>              search-active:     false;
     in-out property <bool>              show-suggestions:  false;
+    // toast
+    in-out property <bool>              toast-visible:     false;
+    in-out property <string>            toast-app:         "";
+    in-out property <float>             toast-progress:    0.0;
+    in-out property <string>            toast-status:      "";
+    // batch
+    in-out property <int>               selected-count:    0;
+    in-out property <bool>              batch-mode:        false;
+    // queue
+    in-out property <[QueueEntry]>      queue:             [];
+    in-out property <int>               queue-count:       0;
+    in-out property <bool>              queue-visible:     false;
+    // disk
+    in-out property <[DiskUsageEntry]>  disk-usage:        [];
+    in-out property <float>             disk-total-mb:     0.0;
+    in-out property <float>             disk-reclaimable:  0.0;
+    in-out property <bool>              disk-visible:      false;
+    // v0.5 bootc
+    in-out property <BootcStatusEntry>  bootc-status;
+    in-out property <bool>              bootc-visible:     false;
+    in-out property <bool>              bootc-upgrading:   false;
+    in-out property <bool>              reboot-pending:    false;
+    // v0.5 remotes
+    in-out property <[RemoteEntry]>     remotes:           [];
+    in-out property <bool>              remotes-visible:   false;
+    // v0.5 notification
+    in-out property <string>            notif-message:     "";
+    in-out property <string>            notif-type:        "info";
+    in-out property <bool>              notif-visible:     false;
 
     private property <bool> show-featured: selected-category == "all" && !search-active;
 
@@ -911,8 +1572,32 @@ export component MainWindow inherits Window {
         TopBar {
             installed-count: root.installed-count;
             updates-count:   root.updates-count;
+            queue-count:     root.queue-count;
+            reboot-pending:  root.reboot-pending;
             updates-clicked  => { root.selected-category = "updates"; StoreLogic.category_changed("updates"); }
             refresh-clicked  => { StoreLogic.refresh_installed(); }
+            queue-clicked    => { root.queue-visible = !root.queue-visible; root.bootc-visible = false; root.disk-visible = false; root.remotes-visible = false; root.detail-visible = false; }
+            disk-clicked     => { root.disk-visible  = !root.disk-visible;  root.queue-visible = false; root.bootc-visible = false; root.remotes-visible = false; root.detail-visible = false; StoreLogic.refresh_disk_usage(); }
+            bootc-clicked    => { root.bootc-visible  = !root.bootc-visible; root.queue-visible = false; root.disk-visible = false; root.remotes-visible = false; root.detail-visible = false; StoreLogic.bootc_refresh_status(); }
+            remotes-clicked  => { root.remotes-visible = !root.remotes-visible; root.queue-visible = false; root.disk-visible = false; root.bootc-visible = false; root.detail-visible = false; StoreLogic.refresh_remotes(); }
+        }
+
+        // Notification banner
+        NotificationBanner {
+            message:      root.notif-message;
+            notif-type:   root.notif-type;
+            visible-notif: root.notif-visible;
+            dismissed => { root.notif-visible = false; StoreLogic.dismiss_notification(); }
+        }
+
+        // Batch toolbar
+        if root.selected-count > 0 : BatchToolbar {
+            count: root.selected-count;
+            install    => { StoreLogic.batch_install(); }
+            remove     => { StoreLogic.batch_remove(); }
+            update     => { StoreLogic.batch_update(); }
+            clear      => { StoreLogic.clear_selection(); root.selected-count = 0; root.batch-mode = false; }
+            select-all => { StoreLogic.select_all_visible(); }
         }
 
         HorizontalLayout {
@@ -921,10 +1606,7 @@ export component MainWindow inherits Window {
             // ── Sidebar ───────────────────────────────────────────────────────
             Rectangle {
                 width: 206px; background: #050110;
-                Rectangle {
-                    x: parent.width - 1px; y: 0; width: 1px; height: parent.height;
-                    background: @linear-gradient(180deg, #7c3aed33, #d946ef22, #7c3aed33);
-                }
+                Rectangle { x: parent.width - 1px; y: 0; width: 1px; height: parent.height; background: @linear-gradient(180deg, #7c3aed33, #d946ef22, #7c3aed33); }
 
                 ScrollView {
                     VerticalLayout {
@@ -939,16 +1621,12 @@ export component MainWindow inherits Window {
                             icon: cat.icon; label: cat.label; count: cat.count;
                             selected: root.selected-category == cat.id;
                             clicked => {
-                                root.selected-category = cat.id;
-                                root.search-text = "";
-                                root.search-active = false;
-                                root.show-suggestions = false;
-                                StoreLogic.search_changed("");
-                                StoreLogic.category_changed(cat.id);
+                                root.selected-category = cat.id; root.search-text = ""; root.search-active = false; root.show-suggestions = false;
+                                StoreLogic.search_changed(""); StoreLogic.category_changed(cat.id);
                             }
                         }
 
-                        Rectangle { height: 12px; }
+                        Rectangle { height: 10px; }
                         Divider { }
                         Rectangle { height: 8px; }
 
@@ -957,58 +1635,67 @@ export component MainWindow inherits Window {
                             Text { text: "LIBRARY"; color: #2a1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
                         }
 
-                        SidebarItem {
-                            icon: "⊞"; label: "Installed"; count: root.installed-count;
-                            selected: root.selected-category == "installed";
-                            clicked => {
-                                root.selected-category = "installed";
-                                root.search-text = ""; root.search-active = false;
-                                root.show-suggestions = false;
-                                StoreLogic.search_changed("");
-                                StoreLogic.category_changed("installed");
-                                StoreLogic.refresh_installed();
-                            }
+                        SidebarItem { icon: "⊞"; label: "Installed"; count: root.installed-count; selected: root.selected-category == "installed";
+                            clicked => { root.selected-category = "installed"; root.search-text = ""; root.search-active = false; root.show-suggestions = false; StoreLogic.search_changed(""); StoreLogic.category_changed("installed"); StoreLogic.refresh_installed(); }
                         }
-                        SidebarItem {
-                            icon: "⟳"; label: "Updates"; count: root.updates-count;
-                            selected: root.selected-category == "updates";
-                            clicked => {
-                                root.selected-category = "updates";
-                                root.search-text = ""; root.search-active = false;
-                                root.show-suggestions = false;
-                                StoreLogic.search_changed("");
-                                StoreLogic.category_changed("updates");
-                            }
+                        SidebarItem { icon: "⟳"; label: "Updates"; count: root.updates-count; selected: root.selected-category == "updates";
+                            clicked => { root.selected-category = "updates"; root.search-text = ""; root.search-active = false; root.show-suggestions = false; StoreLogic.search_changed(""); StoreLogic.category_changed("updates"); }
                         }
 
-                        Rectangle { height: 12px; }
+                        if root.updates-count > 0 : Rectangle {
+                            height: 36px; border-radius: 6px; border-width: 1px; border-color: #3b82f633;
+                            private property <bool> hov: false;
+                            background: hov ? #142240 : #0d1a2e;
+                            animate background { duration: 110ms; }
+                            HorizontalLayout {
+                                padding-left: 14px; spacing: 8px; alignment: start;
+                                Text { text: "⟳"; color: #93c5fd; font-size: 13px; vertical-alignment: center; }
+                                Text { text: "Update All"; color: #93c5fd; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                            }
+                            TouchArea { mouse-cursor: pointer; clicked => { StoreLogic.update_all(); }
+                                pointer-event(e) => { parent.hov = e.kind == PointerEventKind.move; } }
+                        }
+
+                        Rectangle { height: 10px; }
                         Divider { }
-                        Rectangle { height: 12px; }
+                        Rectangle { height: 8px; }
+
+                        // v0.5 Recently installed
+                        if root.recent-activity.length > 0 : VerticalLayout {
+                            spacing: 4px;
+                            HorizontalLayout {
+                                padding-left: 14px; padding-bottom: 4px;
+                                Text { text: "RECENT"; color: #2a1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
+                            }
+                            for item in root.recent-activity : RecentItem {
+                                item: item;
+                                clicked => {
+                                    StoreLogic.open_app_detail(item.app_id);
+                                }
+                            }
+                            Rectangle { height: 8px; }
+                            Divider { }
+                            Rectangle { height: 8px; }
+                        }
 
                         // Legend
                         VerticalLayout {
-                            padding-left: 14px; padding-right: 10px; spacing: 7px;
-                            HorizontalLayout {
+                            padding-left: 14px; padding-right: 10px; spacing: 6px;
+                            for leg in [
+                                {color: #3b82f6, text: "Flatpak (Flathub)"},
+                                {color: #16a34a, text: "System (rpm-ostree)"},
+                                {color: #22c55e, text: "Installed"},
+                            ] : HorizontalLayout {
                                 spacing: 8px; alignment: start;
-                                Rectangle { width: 8px; height: 8px; border-radius: 4px; background: #3b82f6; y: 4px; }
-                                Text { text: "Flatpak (Flathub)"; color: #2a1050; font-size: 10px; }
-                            }
-                            HorizontalLayout {
-                                spacing: 8px; alignment: start;
-                                Rectangle { width: 8px; height: 8px; border-radius: 4px; background: #16a34a; y: 4px; }
-                                Text { text: "System (bootc)"; color: #2a1050; font-size: 10px; }
-                            }
-                            HorizontalLayout {
-                                spacing: 8px; alignment: start;
-                                Rectangle { width: 8px; height: 8px; border-radius: 4px; background: #22c55e; y: 4px; }
-                                Text { text: "Installed"; color: #2a1050; font-size: 10px; }
+                                Rectangle { width: 8px; height: 8px; border-radius: 4px; background: leg.color; y: 5px; }
+                                Text { text: leg.text; color: #2a1050; font-size: 10px; }
                             }
                         }
                     }
                 }
             }
 
-            // ── Main content area ─────────────────────────────────────────────
+            // ── Main content ──────────────────────────────────────────────────
             Rectangle {
                 horizontal-stretch: 1; background: #070213;
 
@@ -1017,129 +1704,77 @@ export component MainWindow inherits Window {
 
                     // Search + sort strip
                     Rectangle {
-                        height: 110px; background: #050110;
-                        Rectangle {
-                            y: parent.height - 1px; width: parent.width; height: 1px;
-                            background: #110820;
-                        }
-
+                        height: 108px; background: #050110;
+                        Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: #110820; }
                         VerticalLayout {
-                            padding-left: 20px; padding-right: 20px;
-                            padding-top: 14px; padding-bottom: 12px;
-                            spacing: 10px;
-
-                            // Search row
+                            padding-left: 20px; padding-right: 20px; padding-top: 14px; padding-bottom: 12px; spacing: 10px;
                             HorizontalLayout {
                                 spacing: 14px; alignment: space-between;
                                 SearchBar {
-                                    horizontal-stretch: 1;
-                                    search-text   <=> root.search-text;
-                                    suggestions:     root.suggestions;
-                                    show-dropdown:   root.show-suggestions;
-                                    text-changed(t) => {
-                                        root.search-active = t != "";
-                                        root.show-suggestions = t != "";
-                                    }
+                                    horizontal-stretch: 1; search-text <=> root.search-text;
+                                    text-changed(t) => { root.search-active = t != ""; root.show-suggestions = t != ""; }
                                     dismissed => { root.show-suggestions = false; }
-                                    suggestion-picked(id) => {
-                                        root.show-suggestions = false;
-                                        StoreLogic.suggestion_selected(id);
-                                    }
                                 }
-
-                                // Result count chip
                                 Rectangle {
                                     width: 110px;
                                     VerticalLayout {
                                         alignment: center; spacing: 2px;
-                                        Text {
-                                            text: root.apps.length + " / " + root.total-count;
-                                            color: search-active ? #9333ea : #2e1050;
-                                            font-size: 12px; font-weight: 700; horizontal-alignment: right;
-                                        }
-                                        Text {
-                                            text: search-active ? "search results" : "apps loaded";
-                                            color: #2e1050; font-size: 10px; horizontal-alignment: right;
-                                        }
+                                        Text { text: root.apps.length + " / " + root.total-count; color: root.search-active ? #9333ea : #2e1050; font-size: 12px; font-weight: 700; horizontal-alignment: right; }
+                                        Text { text: root.search-active ? "results" : "apps loaded"; color: #2e1050; font-size: 10px; horizontal-alignment: right; }
                                     }
                                 }
                             }
-
-                            // Sort bar
                             SortBar {
-                                current-sort: root.current-sort;
-                                sort-picked(id) => {
-                                    root.current-sort = id;
-                                    StoreLogic.sort_changed(id);
-                                }
+                                current-sort: root.current-sort; selected-count: root.selected-count;
+                                sort-picked(id) => { root.current-sort = id; StoreLogic.sort_changed(id); }
+                                toggle-batch-mode => { root.batch-mode = !root.batch-mode; if !root.batch-mode { StoreLogic.clear_selection(); root.selected-count = 0; } }
                             }
                         }
                     }
 
-                    // Loading
                     if root.loading : Rectangle {
                         vertical-stretch: 1;
                         VerticalLayout {
                             alignment: center; spacing: 18px;
                             Text { text: "◈"; color: #7c3aed; font-size: 52px; horizontal-alignment: center; }
                             Text { text: "Loading catalog…"; color: #3d1a60; font-size: 14px; horizontal-alignment: center; }
-                            Text { text: "Fetching from Flathub & system repos"; color: #2a1050; font-size: 11px; horizontal-alignment: center; }
+                            Text { text: "Fetching from Flathub & rpm-ostree repos"; color: #2a1050; font-size: 11px; horizontal-alignment: center; }
                         }
                     }
 
-                    // Empty state
                     if !root.loading && root.apps.length == 0 : Rectangle {
                         vertical-stretch: 1;
                         VerticalLayout {
                             alignment: center; spacing: 14px;
                             Text { text: "◈"; color: #160830; font-size: 52px; horizontal-alignment: center; }
-                            Text {
-                                text: root.search-active ? "No results for: " + root.search-text : "No applications found";
-                                color: #3d2060; font-size: 16px; horizontal-alignment: center;
-                            }
-                            Text {
-                                text: root.search-active ? "Try different keywords or check spelling" : "Try a different category";
-                                color: #2a1040; font-size: 12px; horizontal-alignment: center;
-                            }
+                            Text { text: root.search-active ? "No results for: " + root.search-text : "No applications found"; color: #3d2060; font-size: 16px; horizontal-alignment: center; }
+                            Text { text: root.search-active ? "Try different keywords or check spelling" : "Try a different category"; color: #2a1040; font-size: 12px; horizontal-alignment: center; }
                         }
                     }
 
-                    // App grid + featured
                     if !root.loading && root.apps.length > 0 : ScrollView {
                         vertical-stretch: 1;
                         VerticalLayout {
                             padding: 18px; spacing: 18px; alignment: start;
 
-                            // Featured banner (home only, no search)
                             if root.show-featured && root.featured-apps.length > 0 : VerticalLayout {
                                 spacing: 10px;
-                                HorizontalLayout {
-                                    spacing: 8px; alignment: start;
+                                HorizontalLayout { spacing: 8px; alignment: start;
                                     Text { text: "★"; color: #d946ef; font-size: 12px; vertical-alignment: center; }
                                     Text { text: "FEATURED"; color: #6b4a9e; font-size: 10px; letter-spacing: 2px; font-weight: 700; vertical-alignment: center; }
                                 }
                                 for feat[fi] in root.featured-apps : FeaturedCard {
-                                    visible: fi < 3;
-                                    app: feat;
-                                    clicked => {
-                                        root.selected-app = feat;
-                                        root.detail-visible = true;
-                                        StoreLogic.open_app_detail(feat.id);
-                                    }
-                                    action => {
-                                        if feat.is_installed { StoreLogic.remove_app(feat.flatpak_id); }
-                                        else { StoreLogic.install_app(feat.flatpak_id); root.toast-app = feat.name; root.toast-visible = true; }
-                                    }
+                                    visible: fi < 3; app: feat;
+                                    clicked => { root.selected-app = feat; root.detail-visible = true; root.bootc-visible = false; root.disk-visible = false; root.queue-visible = false; root.remotes-visible = false; root.detail-tab = 0; StoreLogic.open_app_detail(feat.id); }
+                                    action => { if feat.is_installed { StoreLogic.remove_app(feat.flatpak_id); } else { StoreLogic.install_app(feat.flatpak_id); root.toast-app = feat.name; root.toast-visible = true; } }
                                 }
                                 Divider { }
-                                HorizontalLayout {
-                                    spacing: 8px; alignment: start;
+                                HorizontalLayout { spacing: 8px; alignment: start;
                                     Text { text: "◈"; color: #6b4a9e; font-size: 10px; vertical-alignment: center; }
                                     Text { text: "ALL APPS"; color: #6b4a9e; font-size: 10px; letter-spacing: 2px; font-weight: 700; vertical-alignment: center; }
                                 }
                             }
 
-                            // Grid rows (4 per row, up to 500 apps = 125 rows)
                             for row-start in [
                                 0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,76,
                                 80,84,88,92,96,100,104,108,112,116,120,124,128,132,136,140,
@@ -1155,12 +1790,18 @@ export component MainWindow inherits Window {
                                 visible: row-start < root.apps.length;
                                 for app[i] in root.apps : AppCard {
                                     visible: i >= row-start && i < row-start + 4;
-                                    app: app;
+                                    app: app; batch-mode: root.batch-mode;
                                     clicked => {
-                                        root.selected-app = app;
-                                        root.detail-visible = true;
-                                        StoreLogic.open_app_detail(app.id);
+                                        if root.batch-mode { StoreLogic.toggle_select(app.id); }
+                                        else {
+                                            root.selected-app = app; root.detail-visible = true;
+                                            root.bootc-visible = false; root.disk-visible = false;
+                                            root.queue-visible = false; root.remotes-visible = false;
+                                            root.detail-tab = 0;
+                                            StoreLogic.open_app_detail(app.id);
+                                        }
                                     }
+                                    toggled => { StoreLogic.toggle_select(app.id); }
                                     action => {
                                         if app.is_installed { StoreLogic.remove_app(app.flatpak_id); }
                                         else { StoreLogic.install_app(app.flatpak_id); root.toast-app = app.name; root.toast-visible = true; }
@@ -1168,139 +1809,75 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // Load more button
                             if root.apps.length < root.total-count : LoadMoreButton {
-                                loading-more: root.loading-more;
-                                remaining: root.total-count - root.apps.length;
-                                clicked => {
-                                    root.loading-more = true;
-                                    StoreLogic.load_more();
-                                }
+                                loading-more: root.loading-more; remaining: root.total-count - root.apps.length;
+                                clicked => { root.loading-more = true; StoreLogic.load_more(); }
                             }
 
-                            // Bottom padding
                             Rectangle { height: 20px; }
                         }
                     }
                 }
             }
 
-            // ── Detail panel ──────────────────────────────────────────────────
-            DetailPanel {
-                width: root.detail-visible ? 340px : 0px;
-                app: root.selected-app;
-                visible-panel: root.detail-visible;
-                animate width { duration: 240ms; easing: ease-out; }
-                close => { root.detail-visible = false; }
+            // ── Right panels ──────────────────────────────────────────────────
+            if root.detail-visible : DetailPanel {
+                width: 340px; app: root.selected-app; visible-panel: root.detail-visible;
+                active-tab <=> root.detail-tab;
+                close  => { root.detail-visible = false; }
                 update => { StoreLogic.update_app(root.selected-app.flatpak_id); }
                 action => {
                     if root.selected-app.is_installed { StoreLogic.remove_app(root.selected-app.flatpak_id); }
-                    else {
-                        StoreLogic.install_app(root.selected-app.flatpak_id);
-                        root.toast-app = root.selected-app.name;
-                        root.toast-visible = true;
-                    }
+                    else { StoreLogic.install_app(root.selected-app.flatpak_id); root.toast-app = root.selected-app.name; root.toast-visible = true; }
                 }
+            }
+            if root.queue-visible : QueuePanel {
+                width: 320px; queue: root.queue; visible-panel: root.queue-visible;
+                close => { root.queue-visible = false; }
+                cancel(id) => { StoreLogic.cancel_queue_item(id); }
+                clear-done => { StoreLogic.clear_done_queue(); }
+            }
+            if root.disk-visible : DiskPanel {
+                width: 320px; usage: root.disk-usage; total-mb: root.disk-total-mb;
+                reclaimable-mb: root.disk-reclaimable; visible-panel: root.disk-visible;
+                close   => { root.disk-visible = false; }
+                cleanup => { StoreLogic.run_cleanup(); }
+            }
+            if root.bootc-visible : BootcPanel {
+                width: 340px; st: root.bootc-status; visible-panel: root.bootc-visible;
+                upgrading: root.bootc-upgrading;
+                close              => { root.bootc-visible = false; }
+                do-upgrade         => { root.bootc-upgrading = true; StoreLogic.bootc_upgrade(); }
+                do-rollback        => { StoreLogic.bootc_rollback(); }
+                do-refresh         => { StoreLogic.bootc_refresh_status(); }
+                do-rpmostree-upgrade => { StoreLogic.rpmostree_upgrade(); }
+            }
+            if root.remotes-visible : RemotesPanel {
+                width: 340px; remotes: root.remotes; visible-panel: root.remotes-visible;
+                close         => { root.remotes-visible = false; }
+                toggle(name)  => { StoreLogic.toggle_remote(name); }
+                remove-remote(name) => { StoreLogic.remove_remote(name); }
+                add-new       => { StoreLogic.add_remote(self.new-name, self.new-url); self.new-name = ""; self.new-url = ""; }
+                refresh       => { StoreLogic.refresh_remotes(); }
             }
         }
     }
 
-    // Suggestion dropdown overlay
+    // Suggestion overlay
     if root.show-suggestions && root.suggestions.length > 0 : SuggestionDropdown {
-        // Position under search bar: below topbar (58) + below search strip top padding (14) + searchbar center
         x: 206px + 20px;
-        y: 58px + 114px;
-        width: root.width - 206px - 20px - 340px - 20px;
+        y: 58px + (root.notif-visible ? 44px : 0px) + (root.selected-count > 0 ? 52px : 0px) + 112px;
+        width: root.width - 206px - 20px - 20px;
         suggestions: root.suggestions;
-        picked(id) => {
-            root.show-suggestions = false;
-            StoreLogic.suggestion_selected(id);
-        }
+        picked(id) => { root.show-suggestions = false; StoreLogic.suggestion_selected(id); }
     }
 
-    // Progress toast
+    // Toast
     ProgressToast {
         x: root.width  - self.width  - 20px;
         y: root.height - self.height - 20px;
-        app-name:      root.toast-app;
-        progress:      root.toast-progress;
-        visible-toast: root.toast-visible;
-        status-msg:    root.toast-status;
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// v0.3 additions: permissions list, changelog entry, recently-installed banner
-// (these extend MainWindow via in-out properties already defined)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Permissions chip row — shown in DetailPanel
-export component PermissionList inherits VerticalLayout {
-    in property <[string]> permissions: [];
-    spacing: 6px;
-
-    if root.permissions.length > 0 : VerticalLayout {
-        spacing: 6px;
-        Text { text: "PERMISSIONS"; color: #2e1050; font-size: 9px; letter-spacing: 2px; font-weight: 700; }
-        for perm in root.permissions : Rectangle {
-            height: 26px; border-radius: 4px;
-            background: perm-color(perm).transparentize(0.88);
-            border-width: 1px; border-color: perm-color(perm).transparentize(0.6);
-            HorizontalLayout {
-                padding-left: 10px; spacing: 8px; alignment: start;
-                Text { text: perm-icon(perm); color: perm-color(perm); font-size: 12px; vertical-alignment: center; }
-                Text { text: perm; color: perm-color(perm); font-size: 10px; font-weight: 600; vertical-alignment: center; }
-            }
-        }
-    }
-
-    pure function perm-color(p: string) -> color {
-        p == "Network"        ? #3b82f6 :
-        p == "Filesystem"     ? #f59e0b :
-        p == "Webcam"         ? #ef4444 :
-        p == "Microphone"     ? #ef4444 :
-        p == "Location"       ? #22c55e :
-        p == "Notifications"  ? #a855f7 :
-        p == "Bluetooth"      ? #60a5fa :
-        p == "USB"            ? #fb923c :
-                                #6b7280
-    }
-
-    pure function perm-icon(p: string) -> string {
-        p == "Network"        ? "⊕" :
-        p == "Filesystem"     ? "◉" :
-        p == "Webcam"         ? "◎" :
-        p == "Microphone"     ? "◈" :
-        p == "Location"       ? "⊞" :
-        p == "Notifications"  ? "◆" :
-                                "▸"
-    }
-}
-
-// Screenshot placeholder strip
-export component ScreenshotStrip inherits Rectangle {
-    in property <[string]> urls: [];
-    height: urls.length > 0 ? 140px : 0px;
-    background: transparent;
-
-    if urls.length == 0 : Rectangle {
-        height: 0px;
-    }
-
-    if urls.length > 0 : ScrollView {
-        HorizontalLayout {
-            spacing: 10px; padding: 4px;
-            for url[i] in urls : Rectangle {
-                width: 220px; height: 124px; border-radius: 6px;
-                background: #0d0422;
-                border-width: 1px; border-color: #2a1040;
-                // Placeholder until image loading is implemented (v0.4+)
-                VerticalLayout {
-                    alignment: center; spacing: 6px;
-                    Text { text: "◉"; color: #2a1040; font-size: 28px; horizontal-alignment: center; }
-                    Text { text: "Screenshot " + (i + 1); color: #2a1040; font-size: 10px; horizontal-alignment: center; }
-                }
-            }
-        }
+        app-name: root.toast-app; progress: root.toast-progress;
+        visible-toast: root.toast-visible; status-msg: root.toast-status;
+        queue-count: root.queue-count;
     }
 }
